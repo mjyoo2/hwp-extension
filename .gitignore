@@ -1,0 +1,30 @@
+# Build outputs
+out/
+dist/
+*.vsix
+
+# Dependencies
+node_modules/
+
+# Test
+.vscode-test/
+
+# Reference docs and samples (large files)
+reference/
+samples/
+
+# MCP server build
+mcp-server/dist/
+mcp-server/node_modules/
+
+# Test files
+*.hwpx
+*.hwp
+test_*.hwpx
+
+# IDE/Editor
+.mcp.json
+
+# OS
+.DS_Store
+Thumbs.db
