@@ -4,10 +4,11 @@
   "description": "Edit HWP and HWPX (Hangul Word Processor) documents in VSCode with AI-powered MCP integration",
   "license": "MIT",
   "version": "0.1.0",
-  "publisher": "mjyoo",
+  "publisher": "mjyoo2",
+  "icon": "icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mjyoo/hwp-extension"
+    "url": "https://github.com/mjyoo2/hwp-extension"
   },
   "engines": {
     "vscode": "^1.107.0"
