@@ -1,7 +1,7 @@
 {
   "name": "hwpx-editor",
-  "displayName": "HWP/HWPX Editor",
-  "description": "Edit HWP and HWPX (Hangul Word Processor) documents in VSCode with AI-powered MCP integration",
+  "displayName": "HWPX Editor",
+  "description": "Edit HWPX (Hangul Word Processor) documents in VSCode with AI-powered MCP integration",
   "license": "MIT",
   "version": "0.1.0",
   "publisher": "mjyoo2",
@@ -18,7 +18,6 @@
     "Machine Learning"
   ],
   "keywords": [
-    "hwp",
     "hwpx",
     "hangul",
     "korean",
@@ -32,13 +31,10 @@
     "customEditors": [
       {
         "viewType": "hwpx.editor",
-        "displayName": "HWP/HWPX Editor",
+        "displayName": "HWPX Editor",
         "selector": [
           {
             "filenamePattern": "*.hwpx"
-          },
-          {
-            "filenamePattern": "*.hwp"
           }
         ],
         "priority": "default"
@@ -47,11 +43,11 @@
     "commands": [
       {
         "command": "hwpx.showMcpConfig",
-        "title": "HWP: Show MCP Server Configuration"
+        "title": "HWPX: Show MCP Server Configuration"
       },
       {
         "command": "hwpx.copyMcpPath",
-        "title": "HWP: Copy MCP Server Path"
+        "title": "HWPX: Copy MCP Server Path"
       }
     ]
   },

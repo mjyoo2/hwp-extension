@@ -7,3 +7,12 @@ node_modules/**
 .gitignore
 *.map
 tsconfig.json
+
+# Large files - exclude from VSIX
+reference/**
+samples/**
+mcp-server/**
+*.vsix
+icon.svg
+CLAUDE.md
+package-lock.json
