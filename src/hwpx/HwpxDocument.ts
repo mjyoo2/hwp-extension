@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import JSZip from 'jszip';
 import { HwpxParser } from './HwpxParser';
-import { HwpParser } from '../hwp/HwpParser';
+import { HwpDocument } from '../hwp/HwpDocument';
 import {
   HwpxContent,
   HwpxParagraph,
@@ -41,7 +41,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     const extension = uri.fsPath.toLowerCase();
     
     if (extension.endsWith('.hwp')) {
-      const content = HwpParser.parse(fileData);
+      const content = HwpDocument.parseContent(fileData);
       return new HwpxDocument(uri, null, content, 'hwp');
     } else {
       const zip = await JSZip.loadAsync(fileData);
@@ -69,6 +69,8 @@ export class HwpxDocument implements vscode.CustomDocument {
       sections: content.sections,
       images: Array.from(content.images.entries()),
       footnotes: content.footnotes,
+      endnotes: content.endnotes,
+      isReadOnly: this._format === 'hwp',
     };
   }
 
@@ -142,6 +144,56 @@ export class HwpxDocument implements vscode.CustomDocument {
     this._isDirty = true;
   }
 
+  setOutlineLevel(
+    sectionIndex: number,
+    elementIndex: number,
+    outlineLevel: number
+  ): void {
+    const paragraph = this.findParagraphByPath(sectionIndex, elementIndex);
+    if (!paragraph) return;
+
+    this.saveState();
+    if (outlineLevel >= 1 && outlineLevel <= 7) {
+      paragraph.outlineLevel = outlineLevel;
+    } else {
+      delete paragraph.outlineLevel;
+    }
+    this._isDirty = true;
+  }
+
+  setColumnCount(sectionIndex: number, columnCount: number): void {
+    const section = this._content.sections[sectionIndex];
+    if (!section) return;
+
+    this.saveState();
+    if (!section.columnDef) {
+      section.columnDef = {};
+    }
+    section.columnDef.count = columnCount;
+    section.columnDef.sameSize = true;
+    this._isDirty = true;
+  }
+
+  setCaption(
+    sectionIndex: number,
+    elementIndex: number,
+    caption: string,
+    captionPosition: 'above' | 'below' = 'below'
+  ): void {
+    const section = this._content.sections[sectionIndex];
+    if (!section) return;
+
+    const element = section.elements[elementIndex];
+    if (!element) return;
+
+    this.saveState();
+    if (element.type === 'table' || element.type === 'image') {
+      (element.data as { caption?: string; captionPosition?: string }).caption = caption;
+      (element.data as { caption?: string; captionPosition?: string }).captionPosition = captionPosition;
+    }
+    this._isDirty = true;
+  }
+
   insertParagraph(sectionIndex: number, afterElementIndex: number): void {
     const section = this._content.sections[sectionIndex];
     if (!section) return;
@@ -162,6 +214,24 @@ export class HwpxDocument implements vscode.CustomDocument {
     if (!section) return;
 
     this.saveState();
+    section.elements.splice(elementIndex, 1);
+    this._isDirty = true;
+  }
+
+  mergeParagraphWithPrevious(sectionIndex: number, elementIndex: number): void {
+    const section = this._content.sections[sectionIndex];
+    if (!section || elementIndex <= 0) return;
+
+    const currentElement = section.elements[elementIndex];
+    const previousElement = section.elements[elementIndex - 1];
+    if (!currentElement || !previousElement) return;
+    if (currentElement.type !== 'paragraph' || previousElement.type !== 'paragraph') return;
+
+    this.saveState();
+    const currentParagraph = currentElement.data as HwpxParagraph;
+    const previousParagraph = previousElement.data as HwpxParagraph;
+
+    previousParagraph.runs.push(...currentParagraph.runs);
     section.elements.splice(elementIndex, 1);
     this._isDirty = true;
   }
@@ -236,17 +306,191 @@ export class HwpxDocument implements vscode.CustomDocument {
     }
   }
 
+  setTableColumnWidth(sectionIndex: number, elementIndex: number, colIndex: number, width: number): void {
+    const section = this._content.sections[sectionIndex];
+    if (!section) return;
+
+    const element = section.elements[elementIndex];
+    if (!element || element.type !== 'table') return;
+
+    const table = element.data as HwpxTable;
+    
+    this.saveState();
+    
+    if (!table.columnWidths) {
+      const colCount = table.colCount || table.colCnt || table.rows[0]?.cells.length || 0;
+      table.columnWidths = new Array(colCount).fill(100);
+    }
+    
+    if (colIndex >= 0 && colIndex < table.columnWidths.length) {
+      table.columnWidths[colIndex] = width;
+    }
+    
+    for (const row of table.rows) {
+      if (row.cells[colIndex]) {
+        row.cells[colIndex].width = width;
+      }
+    }
+    
+    this._isDirty = true;
+  }
+
+  setTableRowHeight(sectionIndex: number, elementIndex: number, rowIndex: number, height: number): void {
+    const section = this._content.sections[sectionIndex];
+    if (!section) return;
+
+    const element = section.elements[elementIndex];
+    if (!element || element.type !== 'table') return;
+
+    const table = element.data as HwpxTable;
+    
+    if (rowIndex < 0 || rowIndex >= table.rows.length) return;
+    
+    this.saveState();
+    
+    table.rows[rowIndex].height = height;
+    
+    for (const cell of table.rows[rowIndex].cells) {
+      cell.height = height;
+    }
+    
+    this._isDirty = true;
+  }
+
+  insertTableColumn(sectionIndex: number, elementIndex: number, colIndex: number, insertLeft: boolean): void {
+    const section = this._content.sections[sectionIndex];
+    if (!section) return;
+
+    const element = section.elements[elementIndex];
+    if (!element || element.type !== 'table') return;
+
+    const table = element.data as HwpxTable;
+    
+    this.saveState();
+    
+    const insertPos = insertLeft ? colIndex : colIndex + 1;
+    const defaultWidth = table.columnWidths?.[colIndex] || 100;
+    
+    if (table.columnWidths) {
+      table.columnWidths.splice(insertPos, 0, defaultWidth);
+    }
+    
+    for (const row of table.rows) {
+      const newCell: TableCell = {
+        paragraphs: [{
+          id: Math.random().toString(36).substring(2, 11),
+          runs: [{ text: '' }],
+        }],
+        width: defaultWidth,
+      };
+      row.cells.splice(insertPos, 0, newCell);
+    }
+    
+    if (table.colCount !== undefined) table.colCount++;
+    if (table.colCnt !== undefined) table.colCnt++;
+    
+    this._isDirty = true;
+  }
+
+  deleteTableColumn(sectionIndex: number, elementIndex: number, colIndex: number): void {
+    const section = this._content.sections[sectionIndex];
+    if (!section) return;
+
+    const element = section.elements[elementIndex];
+    if (!element || element.type !== 'table') return;
+
+    const table = element.data as HwpxTable;
+    const colCount = table.colCount || table.colCnt || table.rows[0]?.cells.length || 0;
+    
+    if (colCount <= 1) return;
+    
+    this.saveState();
+    
+    if (table.columnWidths && table.columnWidths.length > colIndex) {
+      table.columnWidths.splice(colIndex, 1);
+    }
+    
+    for (const row of table.rows) {
+      if (row.cells.length > colIndex) {
+        row.cells.splice(colIndex, 1);
+      }
+    }
+    
+    if (table.colCount !== undefined) table.colCount--;
+    if (table.colCnt !== undefined) table.colCnt--;
+    
+    this._isDirty = true;
+  }
+
+  mergeTableCells(
+    sectionIndex: number,
+    elementIndex: number,
+    startRow: number,
+    startCol: number,
+    endRow: number,
+    endCol: number
+  ): void {
+    const section = this._content.sections[sectionIndex];
+    if (!section) return;
+
+    const element = section.elements[elementIndex];
+    if (!element || element.type !== 'table') return;
+
+    const table = element.data as HwpxTable;
+    
+    if (startRow < 0 || endRow >= table.rows.length) return;
+    if (startCol < 0 || endCol >= (table.rows[0]?.cells.length || 0)) return;
+    
+    this.saveState();
+    
+    const mainCell = table.rows[startRow].cells[startCol];
+    mainCell.rowSpan = endRow - startRow + 1;
+    mainCell.colSpan = endCol - startCol + 1;
+    
+    let combinedText = '';
+    for (let r = startRow; r <= endRow; r++) {
+      for (let c = startCol; c <= endCol; c++) {
+        if (r === startRow && c === startCol) continue;
+        const cell = table.rows[r]?.cells[c];
+        if (cell?.paragraphs) {
+          cell.paragraphs.forEach(p => {
+            p.runs.forEach(run => {
+              if (run.text) combinedText += run.text;
+            });
+          });
+        }
+      }
+    }
+    
+    if (combinedText && mainCell.paragraphs[0]?.runs[0]) {
+      const existingText = mainCell.paragraphs[0].runs[0].text || '';
+      mainCell.paragraphs[0].runs[0].text = existingText + combinedText;
+    }
+    
+    this._isDirty = true;
+  }
+
   makeEdit(_edit: unknown): void {
     this._isDirty = true;
   }
 
   async save(): Promise<void> {
+    if (this._format === 'hwp') {
+      await this.promptSaveAsHwpx();
+      return;
+    }
     await this.saveAs(this._uri);
   }
 
   async saveAs(targetUri: vscode.Uri): Promise<void> {
     if (this._format === 'hwp') {
-      vscode.window.showWarningMessage('HWP files are read-only. Save as HWPX to preserve changes.');
+      const targetPath = targetUri.fsPath.toLowerCase();
+      if (targetPath.endsWith('.hwp')) {
+        const hwpxUri = vscode.Uri.file(targetUri.fsPath.replace(/\.hwp$/i, '.hwpx'));
+        await this.saveAsHwpx(hwpxUri);
+        return;
+      }
+      await this.saveAsHwpx(targetUri);
       return;
     }
     
@@ -260,11 +504,40 @@ export class HwpxDocument implements vscode.CustomDocument {
     this._isDirty = false;
   }
 
+  private async promptSaveAsHwpx(): Promise<void> {
+    const originalPath = this._uri.fsPath;
+    const suggestedPath = originalPath.replace(/\.hwp$/i, '.hwpx');
+    
+    const result = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file(suggestedPath),
+      filters: {
+        'HWPX Files': ['hwpx'],
+        'All Files': ['*']
+      },
+      title: 'Save as HWPX (HWP files cannot be modified directly)'
+    });
+
+    if (result) {
+      await this.saveAsHwpx(result);
+      vscode.window.showInformationMessage(`Document saved as HWPX: ${result.fsPath}`);
+    }
+  }
+
+  private async saveAsHwpx(targetUri: vscode.Uri): Promise<void> {
+    const newZip = await HwpxParser.createNewHwpxZip(this._content);
+    const data = await newZip.generateAsync({ type: 'uint8array' });
+    await vscode.workspace.fs.writeFile(targetUri, data);
+    
+    this._zip = newZip;
+    this._format = 'hwpx';
+    this._isDirty = false;
+  }
+
   async revert(): Promise<void> {
     const fileData = await vscode.workspace.fs.readFile(this._uri);
     
     if (this._format === 'hwp') {
-      this._content = HwpParser.parse(fileData);
+      this._content = HwpDocument.parseContent(fileData);
     } else {
       this._zip = await JSZip.loadAsync(fileData);
       this._content = await HwpxParser.parse(this._zip);
@@ -273,12 +546,16 @@ export class HwpxDocument implements vscode.CustomDocument {
   }
 
   async backup(destination: vscode.Uri): Promise<vscode.CustomDocumentBackup> {
-    await this.saveAs(destination);
+    let backupUri = destination;
+    if (this._format === 'hwp') {
+      backupUri = vscode.Uri.file(destination.fsPath.replace(/\.hwp$/i, '.hwpx'));
+    }
+    await this.saveAs(backupUri);
     return {
-      id: destination.toString(),
+      id: backupUri.toString(),
       delete: async () => {
         try {
-          await vscode.workspace.fs.delete(destination);
+          await vscode.workspace.fs.delete(backupUri);
         } catch {
         }
       },

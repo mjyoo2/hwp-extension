@@ -25,6 +25,7 @@ import {
   HwpxEllipse,
   HwpxEquation,
   HeaderFooter,
+  HwpxTextBox,
 } from './types';
 
 type DocumentFormat = 'hwpx' | 'hwp';
@@ -43,6 +44,13 @@ export class HwpxDocument {
   private _redoStack: string[] = [];
   private _pendingTextReplacements: Array<{ oldText: string; newText: string; options: { caseSensitive?: boolean; regex?: boolean; replaceAll?: boolean } }> = [];
   private _pendingDirectTextUpdates: Array<{ oldText: string; newText: string }> = [];
+  private _pendingTableRowInserts: Array<{ tableIndex: number; afterRowIndex: number; cellTexts?: string[] }> = [];
+  private _pendingTableRowDeletes: Array<{ tableIndex: number; rowIndex: number }> = [];
+  private _pendingTableColumnInserts: Array<{ tableIndex: number; afterColIndex: number }> = [];
+  private _pendingTableColumnDeletes: Array<{ tableIndex: number; colIndex: number }> = [];
+  private _pendingCellMerges: Array<{ tableIndex: number; startRow: number; startCol: number; endRow: number; endCol: number }> = [];
+  private _pendingHeaderFooter: Array<{ sectionIndex: number; type: 'header' | 'footer'; text: string; includePageNumber: boolean; align: 'left' | 'center' | 'right' }> = [];
+  private _hasStructuralChanges = false;
 
   private constructor(id: string, path: string, zip: JSZip | null, content: HwpxContent, format: DocumentFormat) {
     this._id = id;
@@ -309,6 +317,7 @@ export class HwpxDocument {
     const newElement: SectionElement = { type: 'paragraph', data: newParagraph };
     section.elements.splice(afterElementIndex + 1, 0, newElement);
     this._isDirty = true;
+    this._hasStructuralChanges = true;
     return afterElementIndex + 1;
   }
 
@@ -318,6 +327,110 @@ export class HwpxDocument {
 
     this.saveState();
     section.elements.splice(elementIndex, 1);
+    this._isDirty = true;
+    this._hasStructuralChanges = true;
+    return true;
+  }
+
+  createBulletedList(sectionIndex: number, items: string[], afterElementIndex?: number, bulletChar: string = '•'): number[] {
+    const section = this._content.sections[sectionIndex];
+    if (!section) return [];
+
+    this.saveState();
+    const insertIndex = afterElementIndex !== undefined ? afterElementIndex + 1 : section.elements.length;
+    const insertedIndices: number[] = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const newParagraph: HwpxParagraph = {
+        id: Math.random().toString(36).substring(2, 11),
+        runs: [{ text: `${bulletChar} ${items[i]}` }],
+        listType: 'bullet',
+        listLevel: 0,
+      };
+
+      const newElement: SectionElement = { type: 'paragraph', data: newParagraph };
+      section.elements.splice(insertIndex + i, 0, newElement);
+      insertedIndices.push(insertIndex + i);
+    }
+
+    this._isDirty = true;
+    this._hasStructuralChanges = true;
+    return insertedIndices;
+  }
+
+  createNumberedList(sectionIndex: number, items: string[], afterElementIndex?: number, startNumber: number = 1, format: 'decimal' | 'roman' | 'alpha' = 'decimal'): number[] {
+    const section = this._content.sections[sectionIndex];
+    if (!section) return [];
+
+    this.saveState();
+    const insertIndex = afterElementIndex !== undefined ? afterElementIndex + 1 : section.elements.length;
+    const insertedIndices: number[] = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const number = startNumber + i;
+      let prefix: string;
+      
+      switch (format) {
+        case 'roman':
+          prefix = this.toRoman(number);
+          break;
+        case 'alpha':
+          prefix = String.fromCharCode(96 + number);
+          break;
+        default:
+          prefix = number.toString();
+      }
+
+      const newParagraph: HwpxParagraph = {
+        id: Math.random().toString(36).substring(2, 11),
+        runs: [{ text: `${prefix}. ${items[i]}` }],
+        listType: 'number',
+        listLevel: 0,
+      };
+
+      const newElement: SectionElement = { type: 'paragraph', data: newParagraph };
+      section.elements.splice(insertIndex + i, 0, newElement);
+      insertedIndices.push(insertIndex + i);
+    }
+
+    this._isDirty = true;
+    this._hasStructuralChanges = true;
+    return insertedIndices;
+  }
+
+  private toRoman(num: number): string {
+    const romanNumerals: [number, string][] = [
+      [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+      [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+      [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']
+    ];
+    let result = '';
+    for (const [value, symbol] of romanNumerals) {
+      while (num >= value) {
+        result += symbol;
+        num -= value;
+      }
+    }
+    return result.toLowerCase();
+  }
+
+  setParagraphNumbering(sectionIndex: number, paragraphIndex: number, type: 'none' | 'bullet' | 'decimal' | 'roman' | 'alpha', level: number = 0): boolean {
+    const paragraph = this.findParagraphByPath(sectionIndex, paragraphIndex);
+    if (!paragraph) return false;
+
+    this.saveState();
+    
+    if (type === 'none') {
+      paragraph.listType = undefined;
+      paragraph.listLevel = undefined;
+    } else if (type === 'bullet') {
+      paragraph.listType = 'bullet';
+      paragraph.listLevel = level;
+    } else {
+      paragraph.listType = 'number';
+      paragraph.listLevel = level;
+    }
+
     this._isDirty = true;
     return true;
   }
@@ -464,6 +577,43 @@ export class HwpxDocument {
     return true;
   }
 
+  mergeCells(sectionIndex: number, tableIndex: number, startRow: number, startCol: number, endRow: number, endCol: number): boolean {
+    const table = this.findTable(sectionIndex, tableIndex);
+    if (!table) return false;
+
+    if (startRow < 0 || startCol < 0 || endRow >= table.rows.length || endCol >= (table.rows[0]?.cells.length || 0)) {
+      return false;
+    }
+    if (startRow > endRow || startCol > endCol) return false;
+
+    this.saveState();
+    
+    const rowSpan = endRow - startRow + 1;
+    const colSpan = endCol - startCol + 1;
+
+    const topLeftCell = table.rows[startRow]?.cells[startCol];
+    if (!topLeftCell) return false;
+
+    topLeftCell.rowSpan = rowSpan;
+    topLeftCell.colSpan = colSpan;
+
+    for (let r = startRow; r <= endRow; r++) {
+      for (let c = startCol; c <= endCol; c++) {
+        if (r === startRow && c === startCol) continue;
+        
+        const cell = table.rows[r]?.cells[c];
+        if (cell) {
+          cell.rowSpan = 0;
+          cell.colSpan = 0;
+        }
+      }
+    }
+
+    this._pendingCellMerges.push({ tableIndex, startRow, startCol, endRow, endCol });
+    this._isDirty = true;
+    return true;
+  }
+
   insertTableRow(sectionIndex: number, tableIndex: number, afterRowIndex: number, cellTexts?: string[]): boolean {
     const table = this.findTable(sectionIndex, tableIndex);
     if (!table || !table.rows[afterRowIndex]) return false;
@@ -478,10 +628,15 @@ export class HwpxDocument {
           id: Math.random().toString(36).substring(2, 11),
           runs: [{ text: cellTexts?.[i] || '' }],
         }],
+        colAddr: i,
+        rowAddr: afterRowIndex + 1,
+        colSpan: 1,
+        rowSpan: 1,
       })),
     };
 
     table.rows.splice(afterRowIndex + 1, 0, newRow as any);
+    this._pendingTableRowInserts.push({ tableIndex, afterRowIndex, cellTexts });
     this._isDirty = true;
     return true;
   }
@@ -492,6 +647,7 @@ export class HwpxDocument {
 
     this.saveState();
     table.rows.splice(rowIndex, 1);
+    this._pendingTableRowDeletes.push({ tableIndex, rowIndex });
     this._isDirty = true;
     return true;
   }
@@ -507,8 +663,13 @@ export class HwpxDocument {
           id: Math.random().toString(36).substring(2, 11),
           runs: [{ text: '' }],
         }],
+        colAddr: afterColIndex + 1,
+        rowAddr: 0,
+        colSpan: 1,
+        rowSpan: 1,
       } as any);
     }
+    this._pendingTableColumnInserts.push({ tableIndex, afterColIndex });
     this._isDirty = true;
     return true;
   }
@@ -521,6 +682,7 @@ export class HwpxDocument {
     for (const row of table.rows) {
       row.cells.splice(colIndex, 1);
     }
+    this._pendingTableColumnDeletes.push({ tableIndex, colIndex });
     this._isDirty = true;
     return true;
   }
@@ -794,6 +956,7 @@ export class HwpxDocument {
     }
 
     this._isDirty = true;
+    this._hasStructuralChanges = true;
     return { tableIndex };
   }
 
@@ -813,7 +976,7 @@ export class HwpxDocument {
     };
   }
 
-  setHeader(sectionIndex: number, text: string): boolean {
+  setHeader(sectionIndex: number, text: string, align: 'left' | 'center' | 'right' = 'center'): boolean {
     const section = this._content.sections[sectionIndex];
     if (!section) return false;
 
@@ -822,6 +985,7 @@ export class HwpxDocument {
     const headerParagraph: HwpxParagraph = {
       id: Math.random().toString(36).substring(2, 11),
       runs: [{ text }],
+      paraStyle: { align },
     };
 
     if (!section.header) {
@@ -832,6 +996,7 @@ export class HwpxDocument {
       section.header.paragraphs = [headerParagraph];
     }
 
+    this._pendingHeaderFooter.push({ sectionIndex, type: 'header', text, includePageNumber: false, align });
     this._isDirty = true;
     return true;
   }
@@ -848,15 +1013,24 @@ export class HwpxDocument {
     };
   }
 
-  setFooter(sectionIndex: number, text: string): boolean {
+  setFooter(sectionIndex: number, text: string, includePageNumber: boolean = false, align: 'left' | 'center' | 'right' = 'center'): boolean {
     const section = this._content.sections[sectionIndex];
     if (!section) return false;
 
     this.saveState();
 
+    const runs: TextRun[] = [];
+    if (text) {
+      runs.push({ text });
+    }
+    if (includePageNumber) {
+      runs.push({ text: '', pageNumber: true });
+    }
+
     const footerParagraph: HwpxParagraph = {
       id: Math.random().toString(36).substring(2, 11),
-      runs: [{ text }],
+      runs,
+      paraStyle: { align },
     };
 
     if (!section.footer) {
@@ -867,6 +1041,7 @@ export class HwpxDocument {
       section.footer.paragraphs = [footerParagraph];
     }
 
+    this._pendingHeaderFooter.push({ sectionIndex, type: 'footer', text, includePageNumber, align });
     this._isDirty = true;
     return true;
   }
@@ -1195,6 +1370,98 @@ export class HwpxDocument {
     return { id: ellipseId };
   }
 
+  insertTextBox(sectionIndex: number, x: number, y: number, width: number, height: number, text: string, options?: { fillColor?: string; strokeColor?: string; strokeWidth?: number }): { id: string } | null {
+    const section = this._content.sections[sectionIndex];
+    if (!section) return null;
+
+    this.saveState();
+
+    const textBoxId = Math.random().toString(36).substring(2, 11);
+
+    const newTextBox: HwpxTextBox = {
+      id: textBoxId,
+      x,
+      y,
+      width,
+      height,
+      paragraphs: [{
+        id: Math.random().toString(36).substring(2, 11),
+        runs: [{ text }],
+      }],
+      fillColor: options?.fillColor,
+      strokeColor: options?.strokeColor || '#000000',
+      strokeWidth: options?.strokeWidth ?? 1,
+    };
+
+    const newElement: SectionElement = { type: 'textbox', data: newTextBox };
+    section.elements.push(newElement);
+
+    this._isDirty = true;
+    this._hasStructuralChanges = true;
+    return { id: textBoxId };
+  }
+
+  getTextBoxes(): { id: string; x: number; y: number; width: number; height: number; text: string }[] {
+    const textBoxes: { id: string; x: number; y: number; width: number; height: number; text: string }[] = [];
+
+    for (const section of this._content.sections) {
+      for (const element of section.elements) {
+        if (element.type === 'textbox') {
+          const tb = element.data as HwpxTextBox;
+          textBoxes.push({
+            id: tb.id,
+            x: tb.x,
+            y: tb.y,
+            width: tb.width,
+            height: tb.height,
+            text: tb.paragraphs.map(p => p.runs.map(r => r.text).join('')).join('\n'),
+          });
+        }
+      }
+    }
+
+    return textBoxes;
+  }
+
+  updateTextBoxText(textBoxId: string, text: string): boolean {
+    for (const section of this._content.sections) {
+      for (const element of section.elements) {
+        if (element.type === 'textbox' && (element.data as HwpxTextBox).id === textBoxId) {
+          this.saveState();
+          const tb = element.data as HwpxTextBox;
+          if (tb.paragraphs.length > 0 && tb.paragraphs[0].runs.length > 0) {
+            tb.paragraphs[0].runs[0].text = text;
+          } else {
+            tb.paragraphs = [{
+              id: Math.random().toString(36).substring(2, 11),
+              runs: [{ text }],
+            }];
+          }
+          this._isDirty = true;
+          this._hasStructuralChanges = true;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  deleteTextBox(textBoxId: string): boolean {
+    for (const section of this._content.sections) {
+      for (let i = 0; i < section.elements.length; i++) {
+        const element = section.elements[i];
+        if (element.type === 'textbox' && (element.data as HwpxTextBox).id === textBoxId) {
+          this.saveState();
+          section.elements.splice(i, 1);
+          this._isDirty = true;
+          this._hasStructuralChanges = true;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   // ============================================================
   // Equation Operations
   // ============================================================
@@ -1367,16 +1634,18 @@ export class HwpxDocument {
     this._content.sections.splice(insertIndex, 0, newSection);
 
     this._isDirty = true;
+    this._hasStructuralChanges = true;
     return insertIndex;
   }
 
   deleteSection(sectionIndex: number): boolean {
     if (sectionIndex < 0 || sectionIndex >= this._content.sections.length) return false;
-    if (this._content.sections.length <= 1) return false; // Cannot delete the last section
+    if (this._content.sections.length <= 1) return false;
 
     this.saveState();
     this._content.sections.splice(sectionIndex, 1);
     this._isDirty = true;
+    this._hasStructuralChanges = true;
     return true;
   }
 
@@ -1499,30 +1768,368 @@ export class HwpxDocument {
   private async syncContentToZip(): Promise<void> {
     if (!this._zip) return;
 
-    // Sync structural changes (new paragraphs, tables, etc.)
-    await this.syncStructuralChangesToZip();
+    const hasTextReplacements = this._pendingTextReplacements && this._pendingTextReplacements.length > 0;
+    const hasDirectTextUpdates = this._pendingDirectTextUpdates && this._pendingDirectTextUpdates.length > 0;
+    const hasTableRowInserts = this._pendingTableRowInserts && this._pendingTableRowInserts.length > 0;
+    const hasTableRowDeletes = this._pendingTableRowDeletes && this._pendingTableRowDeletes.length > 0;
+    const hasTableColumnInserts = this._pendingTableColumnInserts && this._pendingTableColumnInserts.length > 0;
+    const hasTableColumnDeletes = this._pendingTableColumnDeletes && this._pendingTableColumnDeletes.length > 0;
+    const hasCellMerges = this._pendingCellMerges && this._pendingCellMerges.length > 0;
+    const hasHeaderFooter = this._pendingHeaderFooter && this._pendingHeaderFooter.length > 0;
+    const hasTableStructuralChanges = hasTableRowInserts || hasTableRowDeletes || hasTableColumnInserts || hasTableColumnDeletes || hasCellMerges;
+    
+    const hasOnlyTextChanges = (hasTextReplacements || hasDirectTextUpdates) && 
+                               !this._hasStructuralChanges && 
+                               !hasTableStructuralChanges &&
+                               !hasHeaderFooter;
 
-    // Apply direct text updates (from updateParagraphText, updateTableCell)
-    if (this._pendingDirectTextUpdates && this._pendingDirectTextUpdates.length > 0) {
+    if (!hasOnlyTextChanges && !hasTableStructuralChanges && !hasHeaderFooter) {
+      await this.syncStructuralChangesToZip();
+    }
+
+    if (hasTableStructuralChanges) {
+      await this.applyTableStructuralChangesToXml();
+      this._pendingTableRowInserts = [];
+      this._pendingTableRowDeletes = [];
+      this._pendingTableColumnInserts = [];
+      this._pendingTableColumnDeletes = [];
+    }
+
+    if (hasHeaderFooter) {
+      await this.applyHeaderFooterToXml();
+      this._pendingHeaderFooter = [];
+    }
+
+    if (hasDirectTextUpdates) {
       await this.applyDirectTextUpdatesToXml();
       this._pendingDirectTextUpdates = [];
     }
 
-    // Apply text replacements (from replaceText)
-    if (this._pendingTextReplacements && this._pendingTextReplacements.length > 0) {
+    if (hasTextReplacements) {
       await this.applyTextReplacementsToXml();
       this._pendingTextReplacements = [];
     }
 
-    // Sync metadata
     await this.syncMetadataToZip();
 
     this._isDirty = false;
+    this._hasStructuralChanges = false;
   }
 
-  /**
-   * Apply direct text updates (exact match replacement)
-   */
+  private async applyHeaderFooterToXml(): Promise<void> {
+    if (!this._zip) return;
+
+    for (const item of this._pendingHeaderFooter) {
+      const sectionPath = `Contents/section${item.sectionIndex}.xml`;
+      const file = this._zip.file(sectionPath);
+      if (!file) continue;
+
+      let xml = await file.async('string');
+      
+      const tagName = item.type === 'header' ? 'hp:header' : 'hp:footer';
+      const existingTagRegex = new RegExp(`<${tagName}[^>]*>[\\s\\S]*?<\\/${tagName}>`, 'g');
+      xml = xml.replace(existingTagRegex, '');
+
+      let content = '';
+      if (item.text) {
+        content += `<hp:t>${this.escapeXml(item.text)}</hp:t>`;
+      }
+      if (item.includePageNumber) {
+        content += `<hp:pageNum/>`;
+      }
+
+      const alignAttr = item.align !== 'left' ? ` align="${item.align}"` : '';
+      const headerFooterXml = `<${tagName}><hp:p${alignAttr}><hp:run>${content}</hp:run></hp:p></${tagName}>`;
+
+      const closingSecTag = '</hs:sec>';
+      const closingSecTagAlt = '</hp:sec>';
+      
+      if (xml.includes(closingSecTag)) {
+        xml = xml.replace(closingSecTag, headerFooterXml + closingSecTag);
+      } else if (xml.includes(closingSecTagAlt)) {
+        xml = xml.replace(closingSecTagAlt, headerFooterXml + closingSecTagAlt);
+      }
+
+      this._zip.file(sectionPath, xml);
+    }
+  }
+
+  private async applyTableStructuralChangesToXml(): Promise<void> {
+    if (!this._zip) return;
+
+    let sectionIndex = 0;
+    while (true) {
+      const sectionPath = `Contents/section${sectionIndex}.xml`;
+      const file = this._zip.file(sectionPath);
+      if (!file) break;
+
+      let xml = await file.async('string');
+
+      for (const insert of this._pendingTableRowInserts) {
+        xml = this.insertTableRowInXml(xml, insert.tableIndex, insert.afterRowIndex, insert.cellTexts);
+      }
+
+      for (const del of this._pendingTableRowDeletes) {
+        xml = this.deleteTableRowInXml(xml, del.tableIndex, del.rowIndex);
+      }
+
+      for (const insert of this._pendingTableColumnInserts) {
+        xml = this.insertTableColumnInXml(xml, insert.tableIndex, insert.afterColIndex);
+      }
+
+      for (const del of this._pendingTableColumnDeletes) {
+        xml = this.deleteTableColumnInXml(xml, del.tableIndex, del.colIndex);
+      }
+
+      for (const merge of this._pendingCellMerges) {
+        xml = this.mergeCellsInXml(xml, merge.tableIndex, merge.startRow, merge.startCol, merge.endRow, merge.endCol);
+      }
+
+      this._zip.file(sectionPath, xml);
+      sectionIndex++;
+    }
+    
+    this._pendingCellMerges = [];
+  }
+
+  private insertTableRowInXml(xml: string, tableIndex: number, afterRowIndex: number, cellTexts?: string[]): string {
+    const tableRegex = /<hp:tbl\b[^>]*>[\s\S]*?<\/hp:tbl>/g;
+    let currentTableIndex = 0;
+    
+    return xml.replace(tableRegex, (tableMatch) => {
+      if (currentTableIndex !== tableIndex) {
+        currentTableIndex++;
+        return tableMatch;
+      }
+      currentTableIndex++;
+
+      const rowRegex = /<hp:tr[^>]*>[\s\S]*?<\/hp:tr>/g;
+      const rows: string[] = [];
+      let rowMatch;
+      while ((rowMatch = rowRegex.exec(tableMatch)) !== null) {
+        rows.push(rowMatch[0]);
+      }
+
+      if (afterRowIndex >= rows.length) return tableMatch;
+
+      const templateRow = rows[afterRowIndex];
+      const newRow = this.createNewRowFromTemplate(templateRow, afterRowIndex + 1, cellTexts);
+      rows.splice(afterRowIndex + 1, 0, newRow);
+
+      const newRowCount = rows.length;
+      let updatedTable = tableMatch.replace(/rowCnt="(\d+)"/, `rowCnt="${newRowCount}"`);
+      
+      const rowsStart = updatedTable.indexOf('<hp:tr');
+      const rowsEnd = updatedTable.lastIndexOf('</hp:tr>') + '</hp:tr>'.length;
+      
+      if (rowsStart !== -1 && rowsEnd > rowsStart) {
+        updatedTable = updatedTable.substring(0, rowsStart) + rows.join('') + updatedTable.substring(rowsEnd);
+      }
+
+      return updatedTable;
+    });
+  }
+
+  private createNewRowFromTemplate(templateRow: string, newRowAddr: number, cellTexts?: string[]): string {
+    let newRow = templateRow;
+    
+    newRow = newRow.replace(/rowAddr="(\d+)"/g, `rowAddr="${newRowAddr}"`);
+    
+    let cellIndex = 0;
+    newRow = newRow.replace(/<hp:tc\b([^>]*)>([\s\S]*?)<\/hp:tc>/g, (cellMatch, attrs, content) => {
+      const newText = cellTexts?.[cellIndex] || '';
+      cellIndex++;
+      
+      const simplifiedContent = content.replace(
+        /<hp:subList[^>]*>[\s\S]*?<\/hp:subList>/,
+        `<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>${this.escapeXml(newText)}</hp:t></hp:run></hp:p></hp:subList>`
+      );
+      
+      return `<hp:tc${attrs}>${simplifiedContent}</hp:tc>`;
+    });
+
+    return newRow;
+  }
+
+  private deleteTableRowInXml(xml: string, tableIndex: number, rowIndex: number): string {
+    const tableRegex = /<hp:tbl\b[^>]*>[\s\S]*?<\/hp:tbl>/g;
+    let currentTableIndex = 0;
+    
+    return xml.replace(tableRegex, (tableMatch) => {
+      if (currentTableIndex !== tableIndex) {
+        currentTableIndex++;
+        return tableMatch;
+      }
+      currentTableIndex++;
+
+      const rowRegex = /<hp:tr[^>]*>[\s\S]*?<\/hp:tr>/g;
+      const rows: string[] = [];
+      let rowMatch;
+      while ((rowMatch = rowRegex.exec(tableMatch)) !== null) {
+        rows.push(rowMatch[0]);
+      }
+
+      if (rowIndex >= rows.length || rows.length <= 1) return tableMatch;
+
+      rows.splice(rowIndex, 1);
+
+      const newRowCount = rows.length;
+      let updatedTable = tableMatch.replace(/rowCnt="(\d+)"/, `rowCnt="${newRowCount}"`);
+      
+      const rowsStart = updatedTable.indexOf('<hp:tr');
+      const rowsEnd = updatedTable.lastIndexOf('</hp:tr>') + '</hp:tr>'.length;
+      
+      if (rowsStart !== -1 && rowsEnd > rowsStart) {
+        updatedTable = updatedTable.substring(0, rowsStart) + rows.join('') + updatedTable.substring(rowsEnd);
+      }
+
+      return updatedTable;
+    });
+  }
+
+  private insertTableColumnInXml(xml: string, tableIndex: number, afterColIndex: number): string {
+    const tableRegex = /<hp:tbl\b[^>]*>[\s\S]*?<\/hp:tbl>/g;
+    let currentTableIndex = 0;
+    
+    return xml.replace(tableRegex, (tableMatch) => {
+      if (currentTableIndex !== tableIndex) {
+        currentTableIndex++;
+        return tableMatch;
+      }
+      currentTableIndex++;
+
+      let updatedTable = tableMatch.replace(/colCnt="(\d+)"/, (_match, oldCount) => {
+        return `colCnt="${parseInt(oldCount) + 1}"`;
+      });
+
+      updatedTable = updatedTable.replace(/<hp:tr[^>]*>[\s\S]*?<\/hp:tr>/g, (rowMatch) => {
+        const cellRegex = /<hp:tc\b[^>]*>[\s\S]*?<\/hp:tc>/g;
+        const cells: string[] = [];
+        let cellMatch;
+        while ((cellMatch = cellRegex.exec(rowMatch)) !== null) {
+          cells.push(cellMatch[0]);
+        }
+
+        if (afterColIndex >= cells.length) return rowMatch;
+
+        const templateCell = cells[afterColIndex];
+        const newCell = this.createNewCellFromTemplate(templateCell, afterColIndex + 1);
+        cells.splice(afterColIndex + 1, 0, newCell);
+
+        const cellsStart = rowMatch.indexOf('<hp:tc');
+        const cellsEnd = rowMatch.lastIndexOf('</hp:tc>') + '</hp:tc>'.length;
+        
+        if (cellsStart !== -1 && cellsEnd > cellsStart) {
+          return rowMatch.substring(0, cellsStart) + cells.join('') + rowMatch.substring(cellsEnd);
+        }
+        return rowMatch;
+      });
+
+      return updatedTable;
+    });
+  }
+
+  private createNewCellFromTemplate(templateCell: string, newColAddr: number): string {
+    let newCell = templateCell;
+    
+    newCell = newCell.replace(/colAddr="(\d+)"/, `colAddr="${newColAddr}"`);
+    newCell = newCell.replace(/<hp:t>([^<]*)<\/hp:t>/g, '<hp:t></hp:t>');
+
+    return newCell;
+  }
+
+  private deleteTableColumnInXml(xml: string, tableIndex: number, colIndex: number): string {
+    const tableRegex = /<hp:tbl\b[^>]*>[\s\S]*?<\/hp:tbl>/g;
+    let currentTableIndex = 0;
+    
+    return xml.replace(tableRegex, (tableMatch) => {
+      if (currentTableIndex !== tableIndex) {
+        currentTableIndex++;
+        return tableMatch;
+      }
+      currentTableIndex++;
+
+      let updatedTable = tableMatch.replace(/colCnt="(\d+)"/, (_match, oldCount) => {
+        const newCount = parseInt(oldCount) - 1;
+        return newCount > 0 ? `colCnt="${newCount}"` : `colCnt="1"`;
+      });
+
+      updatedTable = updatedTable.replace(/<hp:tr[^>]*>[\s\S]*?<\/hp:tr>/g, (rowMatch) => {
+        const cellRegex = /<hp:tc\b[^>]*>[\s\S]*?<\/hp:tc>/g;
+        const cells: string[] = [];
+        let cellMatch;
+        while ((cellMatch = cellRegex.exec(rowMatch)) !== null) {
+          cells.push(cellMatch[0]);
+        }
+
+        if (colIndex >= cells.length || cells.length <= 1) return rowMatch;
+
+        cells.splice(colIndex, 1);
+
+        const cellsStart = rowMatch.indexOf('<hp:tc');
+        const cellsEnd = rowMatch.lastIndexOf('</hp:tc>') + '</hp:tc>'.length;
+        
+        if (cellsStart !== -1 && cellsEnd > cellsStart) {
+          return rowMatch.substring(0, cellsStart) + cells.join('') + rowMatch.substring(cellsEnd);
+        }
+        return rowMatch;
+      });
+
+      return updatedTable;
+    });
+  }
+
+  private mergeCellsInXml(xml: string, tableIndex: number, startRow: number, startCol: number, endRow: number, endCol: number): string {
+    const tableRegex = /<hp:tbl\b[^>]*>[\s\S]*?<\/hp:tbl>/g;
+    let currentTableIndex = 0;
+    
+    return xml.replace(tableRegex, (tableMatch) => {
+      if (currentTableIndex !== tableIndex) {
+        currentTableIndex++;
+        return tableMatch;
+      }
+      currentTableIndex++;
+
+      const rowSpan = endRow - startRow + 1;
+      const colSpan = endCol - startCol + 1;
+
+      let rowIndex = 0;
+      return tableMatch.replace(/<hp:tr[^>]*>([\s\S]*?)<\/hp:tr>/g, (rowMatch, rowContent) => {
+        const currentRow = rowIndex;
+        rowIndex++;
+
+        if (currentRow < startRow || currentRow > endRow) return rowMatch;
+
+        let colIndex = 0;
+        const updatedRowContent = rowContent.replace(/<hp:tc\b([^>]*)>([\s\S]*?)<\/hp:tc>/g, (cellMatch: string, attrs: string, content: string) => {
+          const currentCol = colIndex;
+          colIndex++;
+
+          if (currentCol < startCol || currentCol > endCol) return cellMatch;
+
+          if (currentRow === startRow && currentCol === startCol) {
+            let updatedAttrs = attrs;
+            updatedAttrs = updatedAttrs.replace(/rowSpan="(\d+)"/, `rowSpan="${rowSpan}"`);
+            updatedAttrs = updatedAttrs.replace(/colSpan="(\d+)"/, `colSpan="${colSpan}"`);
+            
+            if (!updatedAttrs.includes('rowSpan=')) {
+              updatedAttrs += ` rowSpan="${rowSpan}"`;
+            }
+            if (!updatedAttrs.includes('colSpan=')) {
+              updatedAttrs += ` colSpan="${colSpan}"`;
+            }
+            
+            return `<hp:tc${updatedAttrs}>${content}</hp:tc>`;
+          } else {
+            return '';
+          }
+        });
+
+        return `<hp:tr>${updatedRowContent}</hp:tr>`;
+      });
+    });
+  }
+
   private async applyDirectTextUpdatesToXml(): Promise<void> {
     if (!this._zip) return;
 
@@ -1620,9 +2227,6 @@ export class HwpxDocument {
     await this.syncMetadataToZip();
   }
 
-  /**
-   * Generate complete section XML from HwpxSection content.
-   */
   private generateSectionXml(section: HwpxSection): string {
     let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
     xml += `<hp:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">\n`;
@@ -1632,24 +2236,50 @@ export class HwpxDocument {
         xml += this.generateParagraphXml(element.data as HwpxParagraph);
       } else if (element.type === 'table') {
         xml += this.generateTableXml(element.data as HwpxTable);
+      } else if (element.type === 'textbox') {
+        xml += this.generateTextBoxXml(element.data as HwpxTextBox);
       }
+    }
+
+    if (section.header) {
+      xml += this.generateHeaderFooterXml(section.header, 'header');
+    }
+    if (section.footer) {
+      xml += this.generateHeaderFooterXml(section.footer, 'footer');
     }
 
     xml += `</hp:sec>`;
     return xml;
   }
 
-  /**
-   * Generate paragraph XML from HwpxParagraph.
-   */
-  private generateParagraphXml(paragraph: HwpxParagraph): string {
-    let xml = `  <hp:p>\n`;
-    for (const run of paragraph.runs) {
-      xml += `    <hp:run>\n`;
-      xml += `      <hp:t>${this.escapeXml(run.text)}</hp:t>\n`;
-      xml += `    </hp:run>\n`;
+  private generateHeaderFooterXml(hf: import('./types').HeaderFooter, type: 'header' | 'footer'): string {
+    let xml = `  <hp:${type}>\n`;
+    for (const para of hf.paragraphs) {
+      xml += this.generateParagraphXml(para, 4);
     }
-    xml += `  </hp:p>\n`;
+    xml += `  </hp:${type}>\n`;
+    return xml;
+  }
+
+  private generateParagraphXml(paragraph: HwpxParagraph, indentSpaces: number = 2): string {
+    const indent = ' '.repeat(indentSpaces);
+    const align = paragraph.paraStyle?.align || 'left';
+    let xml = `${indent}<hp:p`;
+    if (align !== 'left') {
+      xml += ` align="${align}"`;
+    }
+    xml += `>\n`;
+    
+    for (const run of paragraph.runs) {
+      xml += `${indent}  <hp:run>\n`;
+      if (run.pageNumber) {
+        xml += `${indent}    <hp:pageNum/>\n`;
+      } else if (run.text) {
+        xml += `${indent}    <hp:t>${this.escapeXml(run.text)}</hp:t>\n`;
+      }
+      xml += `${indent}  </hp:run>\n`;
+    }
+    xml += `${indent}</hp:p>\n`;
     return xml;
   }
 
@@ -1681,10 +2311,37 @@ export class HwpxDocument {
     return xml;
   }
 
-  /**
-   * Update section XML with current content.
-   * Handles paragraphs and table cells.
-   */
+  private generateTextBoxXml(textBox: HwpxTextBox): string {
+    const xHwpunit = Math.round(textBox.x * 100);
+    const yHwpunit = Math.round(textBox.y * 100);
+    const widthHwpunit = Math.round(textBox.width * 100);
+    const heightHwpunit = Math.round(textBox.height * 100);
+
+    let xml = `  <hp:p>\n`;
+    xml += `    <hp:run>\n`;
+    xml += `      <hp:rect id="${textBox.id}" zOrder="0">\n`;
+    xml += `        <hp:sz width="${widthHwpunit}" height="${heightHwpunit}" widthRelTo="ABSOLUTE" heightRelTo="ABSOLUTE"/>\n`;
+    xml += `        <hp:pos vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="${yHwpunit}" horzOffset="${xHwpunit}"/>\n`;
+    
+    if (textBox.fillColor) {
+      xml += `        <hp:fillBrush><hp:winBrush faceColor="${textBox.fillColor}"/></hp:fillBrush>\n`;
+    }
+    if (textBox.strokeColor && textBox.strokeWidth) {
+      xml += `        <hp:lineShape color="${textBox.strokeColor}" width="${textBox.strokeWidth}"/>\n`;
+    }
+    
+    xml += `        <hp:textbox>\n`;
+    for (const para of textBox.paragraphs) {
+      xml += this.generateParagraphXml(para, 10);
+    }
+    xml += `        </hp:textbox>\n`;
+    xml += `      </hp:rect>\n`;
+    xml += `    </hp:run>\n`;
+    xml += `  </hp:p>\n`;
+    
+    return xml;
+  }
+
   private updateSectionXml(xml: string, section: HwpxSection): string {
     let updatedXml = xml;
 

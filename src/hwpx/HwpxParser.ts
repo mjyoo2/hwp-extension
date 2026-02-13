@@ -133,6 +133,20 @@ export class HwpxParser {
       (content as any).xmlTemplate = xmlTemplate;
     }
 
+    // Expose parsed styles (borderFills, charShapes, etc.) so generators can use them
+    content.styles = {
+      charShapes: new Map(this.styles.charShapes),
+      paraShapes: new Map(this.styles.paraShapes),
+      fonts: new Map(this.styles.fonts),
+      fontsByLang: new Map(this.styles.fontsByLang),
+      borderFills: new Map(this.styles.borderFills),
+      tabDefs: new Map(this.styles.tabDefs),
+      numberings: new Map(this.styles.numberings),
+      bullets: new Map(this.styles.bullets),
+      styles: new Map(this.styles.styles),
+      memoShapes: new Map(this.styles.memoShapes),
+    };
+
     return content;
   }
 
@@ -448,7 +462,7 @@ export class HwpxParser {
       }
 
       const colorMatch = shapeContent.match(/textColor="([^"]*)"/);
-      if (colorMatch && colorMatch[1] !== '#000000') {
+      if (colorMatch) {
         charShape.color = colorMatch[1];
       }
 
@@ -686,8 +700,8 @@ export class HwpxParser {
         paraShape.lineSpacingType = typeMap[lineSpaceMatch[1]?.toUpperCase()] || 'percent';
       }
 
-      const caseMatch = shapeContent.match(/<hp:case[^>]*>([\s\S]*?)<\/hp:case>/i);
-      const marginSource = caseMatch ? caseMatch[1] : shapeContent;
+      const defaultMatch = shapeContent.match(/<hp:default[^>]*>([\s\S]*?)<\/hp:default>/i);
+      const marginSource = defaultMatch ? defaultMatch[1] : shapeContent;
 
       const leftMatch = marginSource.match(/<(?:hc:)?left[^>]*value="(-?\d+)"/i);
       if (leftMatch) {
@@ -1177,6 +1191,8 @@ export class HwpxParser {
     // Use a more precise regex to only remove the footNote element and its content
     cleanedXml = cleanedXml.replace(/<hp:footNote\b[^>]*>[\s\S]*?<\/hp:footNote>/gi, '');
     cleanedXml = cleanedXml.replace(/<hp:endNote\b[^>]*>[\s\S]*?<\/hp:endNote>/gi, '');
+    cleanedXml = cleanedXml.replace(/<hp:header\b[^>]*>[\s\S]*?<\/hp:header>/gi, '');
+    cleanedXml = cleanedXml.replace(/<hp:footer\b[^>]*>[\s\S]*?<\/hp:footer>/gi, '');
 
     const elements: { index: number; type: string; xml: string; parentLinesegs?: import('./types').LineSeg[] }[] = [];
 
@@ -1261,147 +1277,164 @@ export class HwpxParser {
       }
     }
 
+    // IMPORTANT: Use cleanedXml (not xml) for all shape/drawing/image extractions
+    // to exclude elements inside headers/footers/footnotes/endnotes from body content
     const lineRegex = /<hp:line\b[^>]*(?:\/>|>[\s\S]*?<\/hp:line>)/g;
     let lineMatch;
-    while ((lineMatch = lineRegex.exec(xml)) !== null) {
+    while ((lineMatch = lineRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: lineMatch.index, type: 'line', xml: lineMatch[0] });
     }
 
     const rectRegex = /<hp:rect\b[^>]*(?:\/>|>[\s\S]*?<\/hp:rect>)/g;
     let rectMatch;
-    while ((rectMatch = rectRegex.exec(xml)) !== null) {
+    while ((rectMatch = rectRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: rectMatch.index, type: 'rect', xml: rectMatch[0] });
     }
 
     const ellipseRegex = /<hp:ellipse\b[^>]*(?:\/>|>[\s\S]*?<\/hp:ellipse>)/g;
     let ellipseMatch;
-    while ((ellipseMatch = ellipseRegex.exec(xml)) !== null) {
+    while ((ellipseMatch = ellipseRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: ellipseMatch.index, type: 'ellipse', xml: ellipseMatch[0] });
     }
 
     // Arc (호)
     const arcRegex = /<hp:arc\b[^>]*(?:\/>|>[\s\S]*?<\/hp:arc>)/g;
     let arcMatch;
-    while ((arcMatch = arcRegex.exec(xml)) !== null) {
+    while ((arcMatch = arcRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: arcMatch.index, type: 'arc', xml: arcMatch[0] });
     }
 
     // Polygon (다각형)
     const polygonRegex = /<hp:polygon\b[^>]*(?:\/>|>[\s\S]*?<\/hp:polygon>)/g;
     let polygonMatch;
-    while ((polygonMatch = polygonRegex.exec(xml)) !== null) {
+    while ((polygonMatch = polygonRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: polygonMatch.index, type: 'polygon', xml: polygonMatch[0] });
     }
 
     // Curve (곡선)
     const curveRegex = /<hp:curve\b[^>]*(?:\/>|>[\s\S]*?<\/hp:curve>)/g;
     let curveMatch;
-    while ((curveMatch = curveRegex.exec(xml)) !== null) {
+    while ((curveMatch = curveRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: curveMatch.index, type: 'curve', xml: curveMatch[0] });
     }
 
     // ConnectLine (연결선)
     const connectLineRegex = /<hp:connectLine\b[^>]*(?:\/>|>[\s\S]*?<\/hp:connectLine>)/g;
     let connectLineMatch;
-    while ((connectLineMatch = connectLineRegex.exec(xml)) !== null) {
+    while ((connectLineMatch = connectLineRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: connectLineMatch.index, type: 'connectline', xml: connectLineMatch[0] });
     }
 
-    // Container (묶음객체)
-    const containerRegex = /<hp:container\b[^>]*>[\s\S]*?<\/hp:container>/g;
-    let containerMatch;
-    while ((containerMatch = containerRegex.exec(xml)) !== null) {
-      elements.push({ index: containerMatch.index, type: 'container', xml: containerMatch[0] });
+    // Container (묶음객체) - use balanced extraction for nested containers
+    const containerXmls = this.extractBalancedTags(cleanedXml, 'hp:container');
+    let containerSearchPos = 0;
+    for (const containerXml of containerXmls) {
+      const containerIdx = cleanedXml.indexOf(containerXml, containerSearchPos);
+      if (containerIdx >= 0) {
+        elements.push({ index: containerIdx, type: 'container', xml: containerXml });
+        containerSearchPos = containerIdx + containerXml.length;
+      }
     }
 
     // OLE
     const oleRegex = /<hp:ole\b[^>]*(?:\/>|>[\s\S]*?<\/hp:ole>)/g;
     let oleMatch;
-    while ((oleMatch = oleRegex.exec(xml)) !== null) {
+    while ((oleMatch = oleRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: oleMatch.index, type: 'ole', xml: oleMatch[0] });
     }
 
     // Equation (수식)
     const equationRegex = /<hp:equation\b[^>]*(?:\/>|>[\s\S]*?<\/hp:equation>)/g;
     let equationMatch;
-    while ((equationMatch = equationRegex.exec(xml)) !== null) {
+    while ((equationMatch = equationRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: equationMatch.index, type: 'equation', xml: equationMatch[0] });
     }
 
     // TextArt (글맵시)
     const textArtRegex = /<hp:textArt\b[^>]*(?:\/>|>[\s\S]*?<\/hp:textArt>)/g;
     let textArtMatch;
-    while ((textArtMatch = textArtRegex.exec(xml)) !== null) {
+    while ((textArtMatch = textArtRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: textArtMatch.index, type: 'textart', xml: textArtMatch[0] });
     }
 
     // UnknownObject
     const unknownObjRegex = /<hp:unknownObj\b[^>]*(?:\/>|>[\s\S]*?<\/hp:unknownObj>)/g;
     let unknownObjMatch;
-    while ((unknownObjMatch = unknownObjRegex.exec(xml)) !== null) {
+    while ((unknownObjMatch = unknownObjRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: unknownObjMatch.index, type: 'unknownobject', xml: unknownObjMatch[0] });
     }
 
     // Form Objects
     const buttonRegex = /<hp:button\b[^>]*(?:\/>|>[\s\S]*?<\/hp:button>)/g;
     let buttonMatch;
-    while ((buttonMatch = buttonRegex.exec(xml)) !== null) {
+    while ((buttonMatch = buttonRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: buttonMatch.index, type: 'button', xml: buttonMatch[0] });
     }
 
     const radioButtonRegex = /<hp:radioButton\b[^>]*(?:\/>|>[\s\S]*?<\/hp:radioButton>)/g;
     let radioButtonMatch;
-    while ((radioButtonMatch = radioButtonRegex.exec(xml)) !== null) {
+    while ((radioButtonMatch = radioButtonRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: radioButtonMatch.index, type: 'radiobutton', xml: radioButtonMatch[0] });
     }
 
     const checkButtonRegex = /<hp:checkButton\b[^>]*(?:\/>|>[\s\S]*?<\/hp:checkButton>)/g;
     let checkButtonMatch;
-    while ((checkButtonMatch = checkButtonRegex.exec(xml)) !== null) {
+    while ((checkButtonMatch = checkButtonRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: checkButtonMatch.index, type: 'checkbutton', xml: checkButtonMatch[0] });
     }
 
     const comboBoxRegex = /<hp:comboBox\b[^>]*(?:\/>|>[\s\S]*?<\/hp:comboBox>)/g;
     let comboBoxMatch;
-    while ((comboBoxMatch = comboBoxRegex.exec(xml)) !== null) {
+    while ((comboBoxMatch = comboBoxRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: comboBoxMatch.index, type: 'combobox', xml: comboBoxMatch[0] });
     }
 
     const editRegex = /<hp:edit\b[^>]*(?:\/>|>[\s\S]*?<\/hp:edit>)/g;
     let editMatch;
-    while ((editMatch = editRegex.exec(xml)) !== null) {
+    while ((editMatch = editRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: editMatch.index, type: 'edit', xml: editMatch[0] });
     }
 
     const listBoxRegex = /<hp:listBox\b[^>]*(?:\/>|>[\s\S]*?<\/hp:listBox>)/g;
     let listBoxMatch;
-    while ((listBoxMatch = listBoxRegex.exec(xml)) !== null) {
+    while ((listBoxMatch = listBoxRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: listBoxMatch.index, type: 'listbox', xml: listBoxMatch[0] });
     }
 
     const scrollBarRegex = /<hp:scrollBar\b[^>]*(?:\/>|>[\s\S]*?<\/hp:scrollBar>)/g;
     let scrollBarMatch;
-    while ((scrollBarMatch = scrollBarRegex.exec(xml)) !== null) {
+    while ((scrollBarMatch = scrollBarRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: scrollBarMatch.index, type: 'scrollbar', xml: scrollBarMatch[0] });
     }
 
-    const picRegex = /<hp:pic\b[^>]*>[\s\S]*?<\/hp:pic>/g;
-    let picMatch;
-    while ((picMatch = picRegex.exec(xml)) !== null) {
-      elements.push({ index: picMatch.index, type: 'pic', xml: picMatch[0] });
+    const picXmls = this.extractBalancedTags(cleanedXml, 'hp:pic');
+    let picSearchPos = 0;
+    for (const picXml of picXmls) {
+      const picIdx = cleanedXml.indexOf(picXml, picSearchPos);
+      if (picIdx >= 0) {
+        elements.push({ index: picIdx, type: 'pic', xml: picXml });
+        const nestedPics = this.extractBalancedTags(picXml.substring(('<hp:pic').length), 'hp:pic');
+        for (const nestedPic of nestedPics) {
+          const nestedIdx = cleanedXml.indexOf(nestedPic, picIdx);
+          if (nestedIdx >= 0) {
+            elements.push({ index: nestedIdx, type: 'pic', xml: nestedPic });
+          }
+        }
+        picSearchPos = picIdx + picXml.length;
+      }
     }
 
     // Video element
     const videoRegex = /<hp:video\b[^>]*(?:\/>|>[\s\S]*?<\/hp:video>)/g;
     let videoMatch;
-    while ((videoMatch = videoRegex.exec(xml)) !== null) {
+    while ((videoMatch = videoRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: videoMatch.index, type: 'video', xml: videoMatch[0] });
     }
 
     // Chart element
     const chartRegex = /<hp:chart\b[^>]*(?:\/>|>[\s\S]*?<\/hp:chart>)/g;
     let chartMatch;
-    while ((chartMatch = chartRegex.exec(xml)) !== null) {
+    while ((chartMatch = chartRegex.exec(cleanedXml)) !== null) {
       elements.push({ index: chartMatch.index, type: 'chart', xml: chartMatch[0] });
     }
 
@@ -1409,10 +1442,16 @@ export class HwpxParser {
 
     for (const el of elements) {
       if (el.type === 'p') {
+        const containsPic = /<hp:pic\b/.test(el.xml);
+        const containsEquation = /<hp:equation\b/.test(el.xml);
+        const strippedXml = el.xml.replace(/<hp:pic\b[\s\S]*?<\/hp:pic>/g, '').replace(/<hp:equation\b[\s\S]*?<\/hp:equation>/g, '');
+        const hasTextContent = /<hp:t\b[^>]*>[^<]+<\/hp:t>/.test(strippedXml);
+        if ((containsPic || containsEquation) && !hasTextContent) {
+          continue;
+        }
+
         const paragraph = this.parseParagraph(el.xml);
 
-        // Check if this paragraph should have a footnote reference
-        // (footnote was in original XML but removed from cleanedXml)
         for (const fnRef of footnoteRefPositions) {
           // Adjust position check - the footnote was within the original paragraph range
           // Since we removed footnotes, positions shift, but we can check if the footnote
@@ -1508,7 +1547,7 @@ export class HwpxParser {
     this.parseHorizontalRules(xml, section);
 
     if (section.elements.length === 0) {
-      const paragraphs = this.parseParagraphsSimple(xml);
+      const paragraphs = this.parseParagraphsSimple(cleanedXml);
       for (const p of paragraphs) {
         section.elements.push({ type: 'paragraph', data: p });
       }
@@ -1801,10 +1840,9 @@ export class HwpxParser {
       props.pageBorderFill = pageBorderFills;
     }
 
-    // Parse MasterPage
     const masterPages = this.parseMasterPages(content);
     if (masterPages && masterPages.length > 0) {
-      props.masterPage = masterPages;
+      props.masterPages = masterPages;
     }
 
     return props;
@@ -1890,13 +1928,23 @@ export class HwpxParser {
     const colDef: import('./types').ColumnDef = {};
 
     const typeMatch = content.match(/type="([^"]*)"/);
-    if (typeMatch) colDef.type = typeMatch[1].toLowerCase() as 'newspaper' | 'balanced' | 'parallel';
+    if (typeMatch) {
+      const typeVal = typeMatch[1].toLowerCase();
+      if (typeVal === 'newspaper') colDef.type = 'Newspaper';
+      else if (typeVal === 'balancednewspaper' || typeVal === 'balanced') colDef.type = 'BalancedNewspaper';
+      else if (typeVal === 'parallel') colDef.type = 'Parallel';
+    }
 
     const countMatch = content.match(/count="(\d+)"/);
     if (countMatch) colDef.count = parseInt(countMatch[1]);
 
     const layoutMatch = content.match(/layout="([^"]*)"/);
-    if (layoutMatch) colDef.layout = layoutMatch[1].toLowerCase() as 'left' | 'right' | 'mirror';
+    if (layoutMatch) {
+      const layoutVal = layoutMatch[1].toLowerCase();
+      if (layoutVal === 'left') colDef.layout = 'Left';
+      else if (layoutVal === 'right') colDef.layout = 'Right';
+      else if (layoutVal === 'mirror') colDef.layout = 'Mirror';
+    }
 
     const sameSizeMatch = content.match(/sameSize="(true|false|1|0)"/i);
     if (sameSizeMatch) colDef.sameSize = sameSizeMatch[1] === 'true' || sameSizeMatch[1] === '1';
@@ -1914,8 +1962,7 @@ export class HwpxParser {
       };
     }
 
-    // Parse columns
-    const columns: import('./types').ColumnInfo[] = [];
+    const columns: import('./types').Column[] = [];
     const columnRegex = /<hp:column[^>]*width="(\d+)"[^>]*gap="(\d+)"/gi;
     let columnMatch;
     while ((columnMatch = columnRegex.exec(content)) !== null) {
@@ -2067,10 +2114,22 @@ export class HwpxParser {
       }
     }
 
+    // Strip shape elements (pic, container, tbl) that contain nested <hp:run> tags
+    // to prevent caption/subList text from leaking into the paragraph's text runs.
+    // These elements are handled separately by parseImageElement / parseTable.
+    let runSearchXml = xml;
+    const shapeTagNames = ['hp:pic', 'hp:container', 'hp:tbl', 'hp:drawText'];
+    for (const shapeName of shapeTagNames) {
+      const shapeBlocks = this.extractBalancedTags(runSearchXml, shapeName);
+      for (const block of shapeBlocks) {
+        runSearchXml = runSearchXml.replace(block, '');
+      }
+    }
+
     const runRegex = /<hp:run[^>]*>([\s\S]*?)<\/hp:run>/g;
     let runMatch;
 
-    while ((runMatch = runRegex.exec(xml)) !== null) {
+    while ((runMatch = runRegex.exec(runSearchXml)) !== null) {
       const runContent = runMatch[0];
       const parsedRuns = this.parseRun(runContent);
       paragraph.runs.push(...parsedRuns);
@@ -2127,15 +2186,15 @@ export class HwpxParser {
           underlineType: charShape.underlineType,
           underlineShape: charShape.underlineShape,
           underlineColor: charShape.underlineColor,
-          strikethrough: charShape.strikethrough,
+          strikethrough: charShape.strikeout ? true : charShape.strikethrough,
           strikeoutShape: charShape.strikeoutShape,
           strikeoutColor: charShape.strikeoutColor,
           fontColor: charShape.color,
           backgroundColor: charShape.backgroundColor,
           charSpacing: charShape.charSpacing,
-          relativeSize: charShape.relativeSize,
+          relativeSize: charShape.relativeSize ?? charShape.relSize,
           charOffset: charShape.charOffset,
-          emphasisMark: charShape.emphasisMark,
+          emphasisMark: charShape.emphasisMark ?? charShape.symMark,
           useFontSpace: charShape.useFontSpace,
           useKerning: charShape.useKerning,
           outline: charShape.outline,
@@ -2530,10 +2589,16 @@ export class HwpxParser {
       }
 
       const rowCntMatch = tblAttrs.match(/rowCnt="(\d+)"/);
-      if (rowCntMatch) table.rowCnt = parseInt(rowCntMatch[1]);
+      if (rowCntMatch) {
+        table.rowCnt = parseInt(rowCntMatch[1]);
+        table.rowCount = table.rowCnt;
+      }
 
       const colCntMatch = tblAttrs.match(/colCnt="(\d+)"/);
-      if (colCntMatch) table.colCnt = parseInt(colCntMatch[1]);
+      if (colCntMatch) {
+        table.colCnt = parseInt(colCntMatch[1]);
+        table.colCount = table.colCnt;
+      }
 
       const lockMatch = tblAttrs.match(/lock="([^"]*)"/);
       if (lockMatch) {
@@ -2704,24 +2769,42 @@ export class HwpxParser {
     const results: string[] = [];
     const openTag = `<${tagName}`;
     const closeTag = `</${tagName}>`;
+    const openTagLen = openTag.length;
+
+    const isExactTagAt = (xml: string, idx: number): boolean => {
+      const ch = xml.charCodeAt(idx + openTagLen);
+      return ch === 62 || ch === 32 || ch === 47 || ch === 9 || ch === 10 || ch === 13;
+    };
+
+    const findNextExactOpen = (xml: string, from: number): number => {
+      let p = from;
+      while (p < xml.length) {
+        const idx = xml.indexOf(openTag, p);
+        if (idx === -1) return -1;
+        if (isExactTagAt(xml, idx)) return idx;
+        p = idx + 1;
+      }
+      return -1;
+    };
+
     let pos = 0;
 
     while (pos < xml.length) {
-      const startIdx = xml.indexOf(openTag, pos);
+      const startIdx = findNextExactOpen(xml, pos);
       if (startIdx === -1) break;
 
       let depth = 1;
-      let searchPos = startIdx + openTag.length;
+      let searchPos = startIdx + openTagLen;
       
       while (depth > 0 && searchPos < xml.length) {
-        const nextOpen = xml.indexOf(openTag, searchPos);
+        const nextOpen = findNextExactOpen(xml, searchPos);
         const nextClose = xml.indexOf(closeTag, searchPos);
 
         if (nextClose === -1) break;
 
         if (nextOpen !== -1 && nextOpen < nextClose) {
           depth++;
-          searchPos = nextOpen + openTag.length;
+          searchPos = nextOpen + openTagLen;
         } else {
           depth--;
           if (depth === 0) {
@@ -2865,8 +2948,10 @@ export class HwpxParser {
       }
     }
 
-    // Parse cellSz - handle attributes in any order
-    const cellSzTagMatch = xml.match(/<hp:cellSz\s+([^>]*)\/?\s*>/);
+    const subListEndIdx = xml.lastIndexOf('</hp:subList>');
+    const cellMetaXml = subListEndIdx >= 0 ? xml.substring(subListEndIdx) : xml;
+
+    const cellSzTagMatch = cellMetaXml.match(/<hp:cellSz\s+([^>]*)\/?\s*>/);
     if (cellSzTagMatch) {
       const attrs = cellSzTagMatch[1];
       const widthMatch = attrs.match(/width="(\d+)"/);
@@ -2875,8 +2960,7 @@ export class HwpxParser {
       if (heightMatch) cell.height = parseInt(heightMatch[1]) / 100;
     }
 
-    // Parse cellSpan - handle attributes in any order
-    const cellSpanTagMatch = xml.match(/<hp:cellSpan\s+([^>]*)\/?\s*>/);
+    const cellSpanTagMatch = cellMetaXml.match(/<hp:cellSpan\s+([^>]*)\/?\s*>/);
     if (cellSpanTagMatch) {
       const attrs = cellSpanTagMatch[1];
       const colSpanMatch = attrs.match(/colSpan="(\d+)"/);
@@ -2884,15 +2968,13 @@ export class HwpxParser {
       if (colSpanMatch) cell.colSpan = parseInt(colSpanMatch[1]);
       if (rowSpanMatch) cell.rowSpan = parseInt(rowSpanMatch[1]);
     } else {
-      // Fallback: check for individual attributes
-      const rowSpanMatch = xml.match(/rowSpan="(\d+)"/);
+      const rowSpanMatch = cellMetaXml.match(/rowSpan="(\d+)"/);
       if (rowSpanMatch) cell.rowSpan = parseInt(rowSpanMatch[1]);
-      const colSpanMatch = xml.match(/colSpan="(\d+)"/);
+      const colSpanMatch = cellMetaXml.match(/colSpan="(\d+)"/);
       if (colSpanMatch) cell.colSpan = parseInt(colSpanMatch[1]);
     }
 
-    // Parse cellMargin - handle attributes in any order
-    const cellMarginTagMatch = xml.match(/<hp:cellMargin\s+([^>]*)\/?\s*>/);
+    const cellMarginTagMatch = cellMetaXml.match(/<hp:cellMargin\s+([^>]*)\/?\s*>/);
     if (cellMarginTagMatch) {
       const attrs = cellMarginTagMatch[1];
       const leftMatch = attrs.match(/left="(\d+)"/);
@@ -4215,5 +4297,463 @@ export class HwpxParser {
         }
       }
     }
+  }
+
+  /**
+   * Create a new HWPX ZIP archive from HwpxContent
+   * Used when converting HWP to HWPX format
+   */
+  static async createNewHwpxZip(content: HwpxContent): Promise<JSZip> {
+    const zip = new JSZip();
+
+    // 1. Create mimetype file (must be first, uncompressed)
+    zip.file('mimetype', 'application/hwp+zip');
+
+    // 2. Create META-INF/container.xml
+    const containerXml = `<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/>
+  </rootfiles>
+</container>`;
+    zip.file('META-INF/container.xml', containerXml);
+
+    // 3. Create META-INF/manifest.xml
+    const manifestXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">
+  <manifest:file-entry manifest:full-path="/" manifest:media-type="application/hwpml-package+xml"/>
+  <manifest:file-entry manifest:full-path="Contents/header.xml" manifest:media-type="application/xml"/>
+  <manifest:file-entry manifest:full-path="Contents/content.hpf" manifest:media-type="application/xml"/>
+${content.sections.map((_, i) => 
+  `  <manifest:file-entry manifest:full-path="Contents/section${i}.xml" manifest:media-type="application/xml"/>`
+).join('\n')}
+</manifest:manifest>`;
+    zip.file('META-INF/manifest.xml', manifestXml);
+
+    // 4. Create Contents/content.hpf
+    const contentHpf = this.generateContentHpf(content);
+    zip.file('Contents/content.hpf', contentHpf);
+
+    // 5. Create Contents/header.xml
+    const headerXml = this.generateHeaderXml(content);
+    zip.file('Contents/header.xml', headerXml);
+
+    // 6. Create section XML files
+    for (let i = 0; i < content.sections.length; i++) {
+      const sectionXml = this.generateSectionXml(content.sections[i], i);
+      zip.file(`Contents/section${i}.xml`, sectionXml);
+    }
+
+    // 7. Add images to BinData folder
+    for (const [imageId, image] of content.images) {
+      if (image.data) {
+        // Extract base64 data from data URL
+        const base64Match = image.data.match(/^data:[^;]+;base64,(.+)$/);
+        if (base64Match) {
+          const ext = image.mimeType?.split('/')[1] || 'png';
+          zip.file(`BinData/${imageId}.${ext}`, base64Match[1], { base64: true });
+        }
+      }
+    }
+
+    return zip;
+  }
+
+  private static generateContentHpf(content: HwpxContent): string {
+    const sectionItems = content.sections.map((_, i) => 
+      `    <opf:item id="section${i}" href="section${i}.xml" media-type="application/xml"/>`
+    ).join('\n');
+
+    const sectionRefs = content.sections.map((_, i) => 
+      `    <opf:itemref idref="section${i}"/>`
+    ).join('\n');
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<opf:package version="1.0" xmlns:opf="http://www.idpf.org/2007/opf" unique-identifier="bookid">
+  <opf:metadata>
+    <opf:title>${this.escapeXml(content.metadata.title || 'Untitled')}</opf:title>
+    <opf:creator>${this.escapeXml(content.metadata.creator || '')}</opf:creator>
+    <opf:date>${new Date().toISOString()}</opf:date>
+  </opf:metadata>
+  <opf:manifest>
+    <opf:item id="header" href="header.xml" media-type="application/xml"/>
+${sectionItems}
+  </opf:manifest>
+  <opf:spine>
+${sectionRefs}
+  </opf:spine>
+</opf:package>`;
+  }
+
+  private static generateBorderXmlAttr(border: any): string {
+    if (!border) return 'type="NONE" width="0.1 mm" color="#000000"';
+    const style = (border.style || border.type || 'NONE').toUpperCase();
+    let width = border.width;
+    if (typeof width === 'number') {
+      width = `${(width * 0.3528).toFixed(2)} mm`;
+    } else if (typeof width === 'string' && !width.includes('mm')) {
+      width = `${width} mm`;
+    }
+    const color = border.color || '#000000';
+    return `type="${style}" width="${width || '0.1 mm'}" color="${color}"`;
+  }
+
+  private static generateBorderFillXml(id: number, bf: any): string {
+    const left = this.generateBorderXmlAttr(bf.leftBorder);
+    const right = this.generateBorderXmlAttr(bf.rightBorder);
+    const top = this.generateBorderXmlAttr(bf.topBorder);
+    const bottom = this.generateBorderXmlAttr(bf.bottomBorder);
+    const diag = this.generateBorderXmlAttr(bf.diagonal || bf.diagonalBorder);
+    let fillXml = '';
+    if (bf.fillColor && bf.fillColor !== 'none') {
+      fillXml = `<hc:fillBrush><hc:winBrush faceColor="${bf.fillColor}" hatchColor="#999999" alpha="0"/></hc:fillBrush>`;
+    }
+    return `      <hh:borderFill id="${id}" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">
+        <hh:slash type="NONE" Crooked="0" isCounter="0"/>
+        <hh:backSlash type="NONE" Crooked="0" isCounter="0"/>
+        <hh:leftBorder ${left}/>
+        <hh:rightBorder ${right}/>
+        <hh:topBorder ${top}/>
+        <hh:bottomBorder ${bottom}/>
+        <hh:diagonal ${diag}/>
+        ${fillXml}
+      </hh:borderFill>`;
+  }
+
+  private static generateHeaderXml(content: HwpxContent): string {
+    const borderFills = content.styles?.borderFills;
+    let borderFillsXml: string;
+    if (borderFills && borderFills.size > 0) {
+      const entries = Array.from(borderFills.entries()).sort((a, b) => a[0] - b[0]);
+      borderFillsXml = `    <hh:borderFills itemCnt="${entries.length}">
+${entries.map(([id, bf]) => this.generateBorderFillXml(id, bf)).join('\n')}
+    </hh:borderFills>`;
+    } else {
+      borderFillsXml = `    <hh:borderFills itemCnt="1">
+      <hh:borderFill id="0" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">
+        <hh:slash type="NONE" Crooked="0" isCounter="0"/>
+        <hh:backSlash type="NONE" Crooked="0" isCounter="0"/>
+        <hh:leftBorder type="NONE" width="0.1 mm" color="#000000"/>
+        <hh:rightBorder type="NONE" width="0.1 mm" color="#000000"/>
+        <hh:topBorder type="NONE" width="0.1 mm" color="#000000"/>
+        <hh:bottomBorder type="NONE" width="0.1 mm" color="#000000"/>
+        <hh:diagonal type="NONE" width="0.1 mm" color="#000000"/>
+      </hh:borderFill>
+    </hh:borderFills>`;
+    }
+
+    const defaultCharShape = `    <hh:charShape id="0" height="1000" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="0">
+      <hh:fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
+      <hh:ratio hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>
+      <hh:spacing hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
+      <hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>
+      <hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
+    </hh:charShape>`;
+
+    const defaultParaShape = `    <hh:paraShape id="0" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="0" suppressLineNumbers="0" checked="0">
+      <hh:align horizontal="JUSTIFY" vertical="BASELINE"/>
+      <hh:heading type="NONE" idRef="0" level="0"/>
+      <hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="1" widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0" fontLineHeight="0"/>
+      <hh:autoSpacing eAsianEng="0" eAsianNum="0"/>
+      <hp:switch>
+        <hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpML">
+          <hh:margin>
+            <hc:intent value="0"/>
+            <hc:left value="0"/>
+            <hc:right value="0"/>
+            <hc:prev value="0"/>
+            <hc:next value="0"/>
+          </hh:margin>
+          <hh:lineSpacing type="PERCENT" value="160"/>
+        </hp:case>
+      </hp:switch>
+      <hh:border borderFillIDRef="0" offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0"/>
+    </hh:paraShape>`;
+
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<hh:head version="1.0" secCnt="${content.sections.length}"
+  xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"
+  xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"
+  xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+  <hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/>
+  <hh:refList>
+    <hh:fontfaces itemCnt="7">
+      <hh:fontface lang="HANGUL" itemCnt="1">
+        <hh:font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/>
+      </hh:fontface>
+      <hh:fontface lang="LATIN" itemCnt="1">
+        <hh:font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/>
+      </hh:fontface>
+      <hh:fontface lang="HANJA" itemCnt="1">
+        <hh:font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/>
+      </hh:fontface>
+      <hh:fontface lang="JAPANESE" itemCnt="1">
+        <hh:font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/>
+      </hh:fontface>
+      <hh:fontface lang="OTHER" itemCnt="1">
+        <hh:font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/>
+      </hh:fontface>
+      <hh:fontface lang="SYMBOL" itemCnt="1">
+        <hh:font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/>
+      </hh:fontface>
+      <hh:fontface lang="USER" itemCnt="1">
+        <hh:font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/>
+      </hh:fontface>
+    </hh:fontfaces>
+${borderFillsXml}
+    <hh:charShapes itemCnt="1">
+${defaultCharShape}
+    </hh:charShapes>
+    <hh:tabDefs itemCnt="1">
+      <hh:tabPr id="0" autoTabLeft="0" autoTabRight="0"/>
+    </hh:tabDefs>
+    <hh:numberings itemCnt="0"/>
+    <hh:bullets itemCnt="0"/>
+    <hh:paraShapes itemCnt="1">
+${defaultParaShape}
+    </hh:paraShapes>
+    <hh:styles itemCnt="1">
+      <hh:style id="0" type="PARA" name="바탕글" engName="Normal" paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0"/>
+    </hh:styles>
+    <hh:memoShapes itemCnt="0"/>
+  </hh:refList>
+</hh:head>`;
+  }
+
+  private static generateImageRunXml(image: HwpxImage): string {
+    const w = Math.round((image.width || 100) * 100);
+    const h = Math.round((image.height || 100) * 100);
+    return `      <hp:run charPrIDRef="0">
+        <hp:pic>
+          <hp:sz width="${w}" height="${h}"/>
+          <hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>
+          <hp:outMargin left="0" right="0" top="0" bottom="0"/>
+          <hp:shapeComment>${this.escapeXml(image.alt || '')}</hp:shapeComment>
+          <hp:imgRect x0="0" y0="0" x1="${w}" y1="0" x2="${w}" y2="${h}" x3="0" y3="${h}"/>
+          <hp:imgClip left="0" right="0" top="0" bottom="0"/>
+          <hp:img binaryItemIDRef="${image.binaryId}" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/>
+        </hp:pic>
+      </hp:run>`;
+  }
+
+  private static generateEquationRunXml(eq: HwpxEquation): string {
+    return `      <hp:run charPrIDRef="0">
+        <hp:equation baseLine="${eq.baseLine || 85}" textColor="${eq.textColor || '#000000'}" baseUnit="${eq.baseUnit || 1000}" lineMode="${eq.lineMode ? '1' : '0'}" version="${eq.version || '0'}">
+          <hp:script>${this.escapeXml(eq.script || '')}</hp:script>
+        </hp:equation>
+      </hp:run>`;
+  }
+
+  private static generateSectionXml(section: HwpxSection, sectionIndex: number): string {
+    const xmlParts: string[] = [];
+    const elements = section.elements;
+    for (let i = 0; i < elements.length; i++) {
+      const el = elements[i];
+      switch (el.type) {
+        case 'paragraph':
+          xmlParts.push(this.generateParagraphXml(el.data as HwpxParagraph));
+          break;
+        case 'table':
+          xmlParts.push(this.generateTableXml(el.data as HwpxTable));
+          break;
+        case 'image': {
+          const imageRunXml = this.generateImageRunXml(el.data as HwpxImage);
+          xmlParts.push(`    <hp:p paraPrIDRef="0" styleIDRef="0">
+${imageRunXml}
+    </hp:p>`);
+          break;
+        }
+        case 'equation': {
+          const eqRunXml = this.generateEquationRunXml(el.data as HwpxEquation);
+          xmlParts.push(`    <hp:p paraPrIDRef="0" styleIDRef="0">
+${eqRunXml}
+    </hp:p>`);
+          break;
+        }
+        default: break;
+      }
+    }
+    const elementsXml = xmlParts.filter(x => x).join('\n');
+
+    const ps = section.pageSettings;
+    const width = Math.round((ps?.width || 595) * 100);
+    const height = Math.round((ps?.height || 842) * 100);
+    const marginLeft = Math.round((ps?.marginLeft || 85) * 100);
+    const marginRight = Math.round((ps?.marginRight || 85) * 100);
+    const marginTop = Math.round((ps?.marginTop || 56.7) * 100);
+    const marginBottom = Math.round((ps?.marginBottom || 56.7) * 100);
+    const headerOffset = Math.round((ps?.headerMargin || 42.5) * 100);
+    const footerOffset = Math.round((ps?.footerMargin || 42.5) * 100);
+    const gutterWidth = Math.round((ps?.gutterMargin || 0) * 100);
+
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<hs:sec id="sec${sectionIndex}" textDirection="HORIZONTAL" spaceColumns="1134" tabStop="8000" outlineShapeIDRef="0" memoShapeIDRef="0" textVerticalWidthHead="0"
+  xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+  xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+  xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"
+  xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+  <hp:subList textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+    <hp:pagePr landscape="NARROWLY" width="${width}" height="${height}" gutterType="LEFT_ONLY">
+      <hp:margin header="${headerOffset}" footer="${footerOffset}" gutter="${gutterWidth}" left="${marginLeft}" right="${marginRight}" top="${marginTop}" bottom="${marginBottom}"/>
+    </hp:pagePr>
+    <hp:colDef type="NEWSPAPER" layout="LEFT" colCount="1" sameSize="1" sameGap="0"/>
+${elementsXml}
+  </hp:subList>
+</hs:sec>`;
+  }
+
+  private static generateParagraphXml(paragraph: HwpxParagraph): string {
+    const paraPrIdRef = paragraph.paraPrId || 0;
+    const styleIdRef = paragraph.style || 0;
+
+    const runsXml = paragraph.runs.map(r => {
+      return `      <hp:run charPrIDRef="0">
+        <hp:t>${this.escapeXml(r.text || '')}</hp:t>
+      </hp:run>`;
+    }).join('\n');
+
+    return `    <hp:p paraPrIDRef="${paraPrIdRef}" styleIDRef="${styleIdRef}">
+${runsXml}
+    </hp:p>`;
+  }
+
+  private static generateNestedTableXml(table: HwpxTable): string {
+    const rowCnt = table.rows.length;
+    const colCnt = table.rows[0]?.cells.length || 1;
+    const width = Math.round((table.width || 400) * 100);
+    const height = Math.round((table.height || 100) * 100);
+    const colWidths = table.columnWidths || new Array(colCnt).fill(width / colCnt);
+    const colSz = colWidths.map(w => Math.round(w * 100)).join(' ');
+
+    const rowsXml = table.rows.map((row, rowIndex) => {
+      const cellsXml = row.cells.map((cell, colIndex) => {
+        const cw = Math.round((cell.width || colWidths[colIndex] || 100) * 100);
+        const ch = Math.round((cell.height || row.height || 30) * 100);
+        const bfRef = cell.borderFillId || 0;
+
+        let cellContent: string;
+        if (cell.elements && cell.elements.length > 0) {
+          cellContent = cell.elements.map(el => {
+            if (el.type === 'paragraph') {
+              const p = el.data as HwpxParagraph;
+              const runsXml = p.runs.map(r =>
+                `                    <hp:run charPrIDRef="0"><hp:t>${this.escapeXml(r.text || '')}</hp:t></hp:run>`
+              ).join('\n');
+              return `                  <hp:p paraPrIDRef="${p.paraPrId || 0}" styleIDRef="${p.style || 0}">
+${runsXml}
+                  </hp:p>`;
+            } else if (el.type === 'table') {
+              return this.generateNestedTableXml(el.data as HwpxTable);
+            }
+            return '';
+          }).filter(x => x).join('\n');
+        } else {
+          cellContent = cell.paragraphs.map(p => {
+            const runsXml = p.runs.map(r =>
+              `                    <hp:run charPrIDRef="0"><hp:t>${this.escapeXml(r.text || '')}</hp:t></hp:run>`
+            ).join('\n');
+            return `                  <hp:p paraPrIDRef="${p.paraPrId || 0}" styleIDRef="${p.style || 0}">
+${runsXml}
+                  </hp:p>`;
+          }).join('\n');
+        }
+
+        return `              <hp:tc name="" header="0" hasMargin="0" borderFillIDRef="${bfRef}" editable="0" dirty="0">
+                <hp:cellAddr colAddr="${colIndex}" rowAddr="${rowIndex}"/>
+                <hp:cellSpan colSpan="${cell.colSpan || 1}" rowSpan="${cell.rowSpan || 1}"/>
+                <hp:cellSz width="${cw}" height="${ch}"/>
+                <hp:cellMargin left="0" right="0" top="0" bottom="0"/>
+                <hp:subList textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="${(cell.verticalAlign || 'top').toUpperCase()}" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+${cellContent}
+                </hp:subList>
+              </hp:tc>`;
+      }).join('\n');
+
+      return `            <hp:tr>
+${cellsXml}
+            </hp:tr>`;
+    }).join('\n');
+
+    return `            <hp:tbl rowCnt="${rowCnt}" colCnt="${colCnt}" repeatHeader="0" pageBreak="CELL" textWrap="SQUARE" lock="0">
+              <hp:sz width="${width}" height="${height}"/>
+              <hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>
+              <hp:outMargin left="0" right="0" top="0" bottom="0"/>
+              <hp:inMargin left="51" right="51" top="0" bottom="0"/>
+              <hp:colSz>${colSz}</hp:colSz>
+${rowsXml}
+            </hp:tbl>`;
+  }
+
+  private static generateTableXml(table: HwpxTable): string {
+    const rowCnt = table.rows.length;
+    const colCnt = table.rows[0]?.cells.length || 1;
+    const width = Math.round((table.width || 400) * 100);
+    const height = Math.round((table.height || 100) * 100);
+
+    const colWidths = table.columnWidths || new Array(colCnt).fill(width / colCnt);
+    const colSz = colWidths.map(w => Math.round(w * 100)).join(' ');
+
+    const rowsXml = table.rows.map((row, rowIndex) => {
+      const cellsXml = row.cells.map((cell, colIndex) => {
+        const cellWidth = Math.round((cell.width || colWidths[colIndex] || 100) * 100);
+        const cellHeight = Math.round((cell.height || row.height || 30) * 100);
+        const bfRef = cell.borderFillId || 0;
+        const hasMargin = (cell.marginLeft || cell.marginRight || cell.marginTop || cell.marginBottom) ? 1 : 0;
+        const mLeft = Math.round((cell.marginLeft || 0) * 100);
+        const mRight = Math.round((cell.marginRight || 0) * 100);
+        const mTop = Math.round((cell.marginTop || 0) * 100);
+        const mBottom = Math.round((cell.marginBottom || 0) * 100);
+
+        let parasXml: string;
+        if (cell.elements && cell.elements.length > 0) {
+          parasXml = cell.elements.map(el => {
+            if (el.type === 'paragraph') {
+              const p = el.data as HwpxParagraph;
+              const runsXml = p.runs.map(r =>
+                `              <hp:run charPrIDRef="0"><hp:t>${this.escapeXml(r.text || '')}</hp:t></hp:run>`
+              ).join('\n');
+              return `            <hp:p paraPrIDRef="${p.paraPrId || 0}" styleIDRef="${p.style || 0}">
+${runsXml}
+            </hp:p>`;
+            } else if (el.type === 'table') {
+              return this.generateNestedTableXml(el.data as HwpxTable);
+            }
+            return '';
+          }).filter(x => x).join('\n');
+        } else {
+          parasXml = cell.paragraphs.map(p => {
+            const runsXml = p.runs.map(r =>
+              `              <hp:run charPrIDRef="0"><hp:t>${this.escapeXml(r.text || '')}</hp:t></hp:run>`
+            ).join('\n');
+            return `            <hp:p paraPrIDRef="${p.paraPrId || 0}" styleIDRef="${p.style || 0}">
+${runsXml}
+            </hp:p>`;
+          }).join('\n');
+        }
+
+        return `        <hp:tc name="" header="0" hasMargin="${hasMargin}" borderFillIDRef="${bfRef}" editable="0" dirty="0">
+          <hp:cellAddr colAddr="${colIndex}" rowAddr="${rowIndex}"/>
+          <hp:cellSpan colSpan="${cell.colSpan || 1}" rowSpan="${cell.rowSpan || 1}"/>
+          <hp:cellSz width="${cellWidth}" height="${cellHeight}"/>
+          <hp:cellMargin left="${mLeft}" right="${mRight}" top="${mTop}" bottom="${mBottom}"/>
+          <hp:subList textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="${(cell.verticalAlign || 'top').toUpperCase()}" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+${parasXml}
+          </hp:subList>
+        </hp:tc>`;
+      }).join('\n');
+
+      return `      <hp:tr>
+${cellsXml}
+      </hp:tr>`;
+    }).join('\n');
+
+    return `    <hp:tbl rowCnt="${rowCnt}" colCnt="${colCnt}" repeatHeader="0" pageBreak="CELL" textWrap="SQUARE" lock="0">
+      <hp:sz width="${width}" height="${height}"/>
+      <hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>
+      <hp:outMargin left="0" right="0" top="0" bottom="0"/>
+      <hp:inMargin left="51" right="51" top="0" bottom="0"/>
+      <hp:colSz>${colSz}</hp:colSz>
+${rowsXml}
+    </hp:tbl>`;
   }
 }

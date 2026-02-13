@@ -1120,7 +1120,7 @@ export class HwpxDocument {
   // Drawing Objects (Line, Rect, Ellipse)
   // ============================================================
 
-  insertLine(sectionIndex: number, x1: number, y1: number, x2: number, y2: number, options?: { color?: string; width?: number }): { id: string } | null {
+  insertLine(sectionIndex: number, x1: number, y1: number, x2: number, y2: number, options?: { color?: string; width?: number }, afterIndex?: number): { id: string } | null {
     const section = this._content.sections[sectionIndex];
     if (!section) return null;
 
@@ -1139,13 +1139,19 @@ export class HwpxDocument {
     };
 
     const newElement: SectionElement = { type: 'line', data: newLine };
-    section.elements.push(newElement);
+    if (afterIndex !== undefined && afterIndex >= 0) {
+      section.elements.splice(afterIndex + 1, 0, newElement);
+    } else if (afterIndex === -1) {
+      section.elements.unshift(newElement);
+    } else {
+      section.elements.push(newElement);
+    }
 
     this._isDirty = true;
     return { id: lineId };
   }
 
-  insertRect(sectionIndex: number, x: number, y: number, width: number, height: number, options?: { fillColor?: string; strokeColor?: string }): { id: string } | null {
+  insertRect(sectionIndex: number, x: number, y: number, width: number, height: number, options?: { fillColor?: string; strokeColor?: string }, afterIndex?: number): { id: string } | null {
     const section = this._content.sections[sectionIndex];
     if (!section) return null;
 
@@ -1164,13 +1170,19 @@ export class HwpxDocument {
     };
 
     const newElement: SectionElement = { type: 'rect', data: newRect };
-    section.elements.push(newElement);
+    if (afterIndex !== undefined && afterIndex >= 0) {
+      section.elements.splice(afterIndex + 1, 0, newElement);
+    } else if (afterIndex === -1) {
+      section.elements.unshift(newElement);
+    } else {
+      section.elements.push(newElement);
+    }
 
     this._isDirty = true;
     return { id: rectId };
   }
 
-  insertEllipse(sectionIndex: number, cx: number, cy: number, rx: number, ry: number, options?: { fillColor?: string; strokeColor?: string }): { id: string } | null {
+  insertEllipse(sectionIndex: number, cx: number, cy: number, rx: number, ry: number, options?: { fillColor?: string; strokeColor?: string }, afterIndex?: number): { id: string } | null {
     const section = this._content.sections[sectionIndex];
     if (!section) return null;
 
@@ -1189,7 +1201,13 @@ export class HwpxDocument {
     };
 
     const newElement: SectionElement = { type: 'ellipse', data: newEllipse };
-    section.elements.push(newElement);
+    if (afterIndex !== undefined && afterIndex >= 0) {
+      section.elements.splice(afterIndex + 1, 0, newElement);
+    } else if (afterIndex === -1) {
+      section.elements.unshift(newElement);
+    } else {
+      section.elements.push(newElement);
+    }
 
     this._isDirty = true;
     return { id: ellipseId };

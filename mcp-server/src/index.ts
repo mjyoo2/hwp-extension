@@ -199,6 +199,54 @@ const tools = [
     },
   },
 
+  // === List Operations ===
+  {
+    name: 'create_bulleted_list',
+    description: 'Create a bulleted list (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        section_index: { type: 'number', description: 'Section index (default 0)' },
+        items: { type: 'array', items: { type: 'string' }, description: 'List items' },
+        after_element_index: { type: 'number', description: 'Insert after this element (default: append to end)' },
+        bullet_char: { type: 'string', description: 'Bullet character (default: •)' },
+      },
+      required: ['doc_id', 'items'],
+    },
+  },
+  {
+    name: 'create_numbered_list',
+    description: 'Create a numbered list (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        section_index: { type: 'number', description: 'Section index (default 0)' },
+        items: { type: 'array', items: { type: 'string' }, description: 'List items' },
+        after_element_index: { type: 'number', description: 'Insert after this element (default: append to end)' },
+        start_number: { type: 'number', description: 'Starting number (default: 1)' },
+        format: { type: 'string', enum: ['decimal', 'roman', 'alpha'], description: 'Numbering format (default: decimal)' },
+      },
+      required: ['doc_id', 'items'],
+    },
+  },
+  {
+    name: 'set_paragraph_numbering',
+    description: 'Set numbering/bullet type for a paragraph (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        section_index: { type: 'number', description: 'Section index' },
+        paragraph_index: { type: 'number', description: 'Paragraph index' },
+        type: { type: 'string', enum: ['none', 'bullet', 'decimal', 'roman', 'alpha'], description: 'Numbering type' },
+        level: { type: 'number', description: 'Indent level (0-9, default: 0)' },
+      },
+      required: ['doc_id', 'section_index', 'paragraph_index', 'type'],
+    },
+  },
+
   // === Character Styling ===
   {
     name: 'set_text_style',
@@ -472,6 +520,23 @@ const tools = [
       required: ['doc_id', 'section_index', 'table_index'],
     },
   },
+  {
+    name: 'merge_table_cells',
+    description: 'Merge a range of table cells (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        section_index: { type: 'number', description: 'Section index' },
+        table_index: { type: 'number', description: 'Table index' },
+        start_row: { type: 'number', description: 'Starting row index' },
+        start_col: { type: 'number', description: 'Starting column index' },
+        end_row: { type: 'number', description: 'Ending row index (inclusive)' },
+        end_col: { type: 'number', description: 'Ending column index (inclusive)' },
+      },
+      required: ['doc_id', 'section_index', 'table_index', 'start_row', 'start_col', 'end_row', 'end_col'],
+    },
+  },
 
   // === Page Settings ===
   {
@@ -647,14 +712,14 @@ const tools = [
   },
   {
     name: 'set_header',
-    description: 'Set header content for a section (HWPX only)',
+    description: 'Set header text for a section.',
     inputSchema: {
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        section_index: { type: 'number', description: 'Section index (default 0)' },
+        section_index: { type: 'number', description: 'Section index (default: 0)' },
         text: { type: 'string', description: 'Header text content' },
-        apply_page_type: { type: 'string', enum: ['both', 'even', 'odd'], description: 'Apply to page type (default: both)' },
+        align: { type: 'string', enum: ['left', 'center', 'right'], description: 'Text alignment (default: center)' },
       },
       required: ['doc_id', 'text'],
     },
@@ -673,14 +738,15 @@ const tools = [
   },
   {
     name: 'set_footer',
-    description: 'Set footer content for a section (HWPX only)',
+    description: 'Set footer text for a section.',
     inputSchema: {
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        section_index: { type: 'number', description: 'Section index (default 0)' },
+        section_index: { type: 'number', description: 'Section index (default: 0)' },
         text: { type: 'string', description: 'Footer text content' },
-        apply_page_type: { type: 'string', enum: ['both', 'even', 'odd'], description: 'Apply to page type (default: both)' },
+        include_page_number: { type: 'boolean', description: 'Include page number (default: false)' },
+        align: { type: 'string', enum: ['left', 'center', 'right'], description: 'Text alignment (default: center)' },
       },
       required: ['doc_id', 'text'],
     },
@@ -895,6 +961,64 @@ const tools = [
         stroke_width: { type: 'number', description: 'Stroke width' },
       },
       required: ['doc_id', 'section_index', 'after_index', 'cx', 'cy', 'rx', 'ry'],
+    },
+  },
+
+  // === TextBox ===
+  {
+    name: 'insert_textbox',
+    description: 'Insert a text box (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        section_index: { type: 'number', description: 'Section index' },
+        x: { type: 'number', description: 'X position in pt' },
+        y: { type: 'number', description: 'Y position in pt' },
+        width: { type: 'number', description: 'Width in pt' },
+        height: { type: 'number', description: 'Height in pt' },
+        text: { type: 'string', description: 'Text content' },
+        fill_color: { type: 'string', description: 'Fill color (hex, e.g., "#FFFFFF")' },
+        stroke_color: { type: 'string', description: 'Stroke color (hex)' },
+        stroke_width: { type: 'number', description: 'Stroke width in pt' },
+      },
+      required: ['doc_id', 'section_index', 'x', 'y', 'width', 'height', 'text'],
+    },
+  },
+  {
+    name: 'get_textboxes',
+    description: 'Get all text boxes in the document',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+      },
+      required: ['doc_id'],
+    },
+  },
+  {
+    name: 'update_textbox_text',
+    description: 'Update text in a text box (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        textbox_id: { type: 'string', description: 'TextBox ID' },
+        text: { type: 'string', description: 'New text content' },
+      },
+      required: ['doc_id', 'textbox_id', 'text'],
+    },
+  },
+  {
+    name: 'delete_textbox',
+    description: 'Delete a text box (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        textbox_id: { type: 'string', description: 'TextBox ID' },
+      },
+      required: ['doc_id', 'textbox_id'],
     },
   },
 
@@ -1279,6 +1403,49 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return success({ message: 'Text appended' });
       }
 
+      case 'create_bulleted_list': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        const indices = doc.createBulletedList(
+          (args?.section_index as number) ?? 0,
+          args?.items as string[],
+          args?.after_element_index as number | undefined,
+          (args?.bullet_char as string) ?? '•'
+        );
+        return success({ inserted_indices: indices, count: indices.length });
+      }
+
+      case 'create_numbered_list': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        const indices = doc.createNumberedList(
+          (args?.section_index as number) ?? 0,
+          args?.items as string[],
+          args?.after_element_index as number | undefined,
+          (args?.start_number as number) ?? 1,
+          (args?.format as 'decimal' | 'roman' | 'alpha') ?? 'decimal'
+        );
+        return success({ inserted_indices: indices, count: indices.length });
+      }
+
+      case 'set_paragraph_numbering': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        const result = doc.setParagraphNumbering(
+          args?.section_index as number,
+          args?.paragraph_index as number,
+          args?.type as 'none' | 'bullet' | 'decimal' | 'roman' | 'alpha',
+          (args?.level as number) ?? 0
+        );
+        return success({ success: result });
+      }
+
       // === Character Styling ===
       case 'set_text_style': {
         const doc = getDoc(args?.doc_id as string);
@@ -1542,6 +1709,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return success({ csv });
       }
 
+      case 'merge_table_cells': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        if (doc.mergeCells(
+          args?.section_index as number,
+          args?.table_index as number,
+          args?.start_row as number,
+          args?.start_col as number,
+          args?.end_row as number,
+          args?.end_col as number
+        )) {
+          return success({ message: 'Cells merged' });
+        }
+        return error('Failed to merge cells');
+      }
+
       // === Page Settings ===
       case 'get_page_settings': {
         const doc = getDoc(args?.doc_id as string);
@@ -1717,7 +1902,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
-        if (doc.setHeader(args?.section_index as number || 0, args?.text as string)) {
+        const align = (args?.align as 'left' | 'center' | 'right') || 'center';
+        if (doc.setHeader(args?.section_index as number || 0, args?.text as string, align)) {
           return success({ message: 'Header set successfully' });
         }
         return error('Failed to set header');
@@ -1736,7 +1922,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
-        if (doc.setFooter(args?.section_index as number || 0, args?.text as string)) {
+        const includePageNumber = args?.include_page_number === true;
+        const align = (args?.align as 'left' | 'center' | 'right') || 'center';
+        if (doc.setFooter(args?.section_index as number || 0, args?.text as string, includePageNumber, align)) {
           return success({ message: 'Footer set successfully' });
         }
         return error('Failed to set footer');
@@ -1954,6 +2142,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
         if (!result) return error('Failed to insert ellipse');
         return success({ message: 'Ellipse inserted', id: result.id });
+      }
+
+      case 'insert_textbox': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        const result = doc.insertTextBox(
+          args?.section_index as number,
+          args?.x as number,
+          args?.y as number,
+          args?.width as number,
+          args?.height as number,
+          args?.text as string,
+          {
+            fillColor: args?.fill_color as string,
+            strokeColor: args?.stroke_color as string,
+            strokeWidth: args?.stroke_width as number,
+          }
+        );
+        if (!result) return error('Failed to insert text box');
+        return success({ message: 'Text box inserted', id: result.id });
+      }
+
+      case 'get_textboxes': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        return success({ textboxes: doc.getTextBoxes() });
+      }
+
+      case 'update_textbox_text': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        if (doc.updateTextBoxText(args?.textbox_id as string, args?.text as string)) {
+          return success({ message: 'Text box updated' });
+        }
+        return error('Text box not found');
+      }
+
+      case 'delete_textbox': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        if (doc.deleteTextBox(args?.textbox_id as string)) {
+          return success({ message: 'Text box deleted' });
+        }
+        return error('Text box not found');
       }
 
       // === Equations ===

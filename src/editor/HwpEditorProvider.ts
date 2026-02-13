@@ -2,13 +2,17 @@ import * as vscode from 'vscode';
 import { HwpxDocument } from '../hwpx/HwpxDocument';
 import { getWebviewContent } from './webview';
 
-export class HwpxEditorProvider implements vscode.CustomEditorProvider<HwpxDocument> {
-  private static readonly viewType = 'hwpx.editor';
+/**
+ * HWP Editor Provider - Handles binary HWP files
+ * Now uses HwpxDocument for editing, with save converting to HWPX format
+ */
+export class HwpEditorProvider implements vscode.CustomEditorProvider<HwpxDocument> {
+  private static readonly viewType = 'hwp.editor';
 
   public static register(context: vscode.ExtensionContext): vscode.Disposable {
-    const provider = new HwpxEditorProvider(context);
+    const provider = new HwpEditorProvider(context);
     return vscode.window.registerCustomEditorProvider(
-      HwpxEditorProvider.viewType,
+      HwpEditorProvider.viewType,
       provider,
       {
         webviewOptions: {
@@ -169,12 +173,6 @@ export class HwpxEditorProvider implements vscode.CustomEditorProvider<HwpxDocum
 
         case 'deleteParagraph':
           document.deleteParagraph(message.sectionIndex, message.elementIndex);
-          fireDocumentChange();
-          await updateWebview();
-          break;
-
-        case 'mergeParagraphWithPrevious':
-          document.mergeParagraphWithPrevious(message.sectionIndex, message.elementIndex);
           fireDocumentChange();
           await updateWebview();
           break;

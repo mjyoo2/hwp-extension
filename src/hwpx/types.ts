@@ -574,7 +574,7 @@ export interface CharacterStyle {
 
 export interface TabInfo {
   width: number;
-  leader?: 'none' | 'dot' | 'hyphen' | 'underscore';
+  leader?: 'none' | 'solid' | 'dash' | 'dot' | 'dashDot' | 'dashDotDot' | 'hyphen' | 'underscore';
 }
 
 export interface HyperlinkField {
@@ -845,7 +845,20 @@ export interface CellMargin {
 
 export type CellElement =
   | { type: 'paragraph'; data: HwpxParagraph }
-  | { type: 'table'; data: HwpxTable };
+  | { type: 'table'; data: HwpxTable }
+  | { type: 'image'; data: HwpxImage }
+  | { type: 'equation'; data: HwpxEquation }
+  | { type: 'video'; data: HwpxVideo }
+  | { type: 'chart'; data: HwpxChart }
+  | { type: 'line'; data: HwpxLine }
+  | { type: 'rect'; data: HwpxRect }
+  | { type: 'ellipse'; data: HwpxEllipse }
+  | { type: 'arc'; data: HwpxArc }
+  | { type: 'polygon'; data: HwpxPolygon }
+  | { type: 'curve'; data: HwpxCurve }
+  | { type: 'container'; data: HwpxContainer }
+  | { type: 'ole'; data: HwpxOle }
+  | { type: 'textart'; data: HwpxTextArt };
 
 export interface TableCell {
   name?: string;
@@ -916,6 +929,8 @@ export interface HwpxTable {
   outMargin?: ObjectMargin;
   lock?: boolean;
   linesegs?: LineSeg[];
+  caption?: string;
+  captionPosition?: 'above' | 'below';
 }
 
 // ============================================================
@@ -1058,6 +1073,8 @@ export interface HwpxImage {
   alpha?: number;
   effect?: string;
   shapeComment?: string;
+  caption?: string;
+  captionPosition?: 'above' | 'below';
 }
 
 // ============================================================
@@ -1419,9 +1436,18 @@ export interface HwpxTextArt {
   outlineData?: Array<{ x: number; y: number }>;
 }
 
-// ============================================================
-// 5.13-5.25 Field and Control Elements
-// ============================================================
+export interface HwpxVideo {
+  id: string;
+  binDataId: number;
+  thumbnailBinDataId?: number;
+  videoType?: 'local' | 'web';
+  webUrl?: string;
+}
+
+export interface HwpxChart {
+  id: string;
+  rawData?: Uint8Array;
+}
 
 export interface HwpxHyperlink {
   url: string;
@@ -1490,7 +1516,7 @@ export interface HiddenComment {
 // ============================================================
 
 export interface ParagraphStyle {
-  align?: 'left' | 'center' | 'right' | 'justify' | 'distribute';
+  align?: 'left' | 'center' | 'right' | 'justify' | 'distribute' | 'Left' | 'Center' | 'Right' | 'Justify' | 'Distribute' | 'DistributeSpace';
   lineSpacing?: number;
   lineSpacingType?: 'percent' | 'fixed' | 'betweenLines' | 'atLeast';
   marginTop?: number;
@@ -1538,7 +1564,8 @@ export interface HwpxParagraph {
   paraStyle?: ParagraphStyle;
   listType?: 'none' | 'bullet' | 'number';
   listLevel?: number;
-  linesegs?: LineSeg[];  // Pre-calculated layout info from HWPX
+  outlineLevel?: number;
+  linesegs?: LineSeg[];
 }
 
 export interface HeaderFooter {
@@ -1584,7 +1611,13 @@ export type SectionElement =
   | { type: 'combobox'; data: HwpxComboBox }
   | { type: 'edit'; data: HwpxEdit }
   | { type: 'listbox'; data: HwpxListBox }
-  | { type: 'scrollbar'; data: HwpxScrollBar };
+  | { type: 'scrollbar'; data: HwpxScrollBar }
+  | { type: 'header'; data: HeaderFooter }
+  | { type: 'footer'; data: HeaderFooter }
+  | { type: 'footnote'; data: Footnote }
+  | { type: 'endnote'; data: Endnote }
+  | { type: 'video'; data: HwpxVideo }
+  | { type: 'chart'; data: HwpxChart };
 
 export interface PageSettings {
   width: number;
@@ -1607,6 +1640,7 @@ export interface SectionProperties {
   outlineShapeIdRef?: number;
   memoShapeIdRef?: number;
   masterPageCnt?: number;
+  masterPages?: MasterPage[];
   grid?: {
     lineGrid?: number;
     charGrid?: number;

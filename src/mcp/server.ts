@@ -1905,7 +1905,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           {
             color: args?.stroke_color as string,
             width: args?.stroke_width as number,
-          }
+          },
+          args?.after_index as number
         );
         if (!result) return error('Failed to insert line');
         return success({ message: 'Line inserted', id: result.id });
@@ -1925,7 +1926,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           {
             fillColor: args?.fill_color as string,
             strokeColor: args?.stroke_color as string,
-          }
+          },
+          args?.after_index as number
         );
         if (!result) return error('Failed to insert rectangle');
         return success({ message: 'Rectangle inserted', id: result.id });
@@ -1945,7 +1947,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           {
             fillColor: args?.fill_color as string,
             strokeColor: args?.stroke_color as string,
-          }
+          },
+          args?.after_index as number
         );
         if (!result) return error('Failed to insert ellipse');
         return success({ message: 'Ellipse inserted', id: result.id });

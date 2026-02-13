@@ -105,6 +105,7 @@ export class HwpxParser {
       this.parseStyles(headerXml);
       this.parseMemoShapes(headerXml);
       content.compatibleDocument = this.parseCompatibleDocument(headerXml);
+      content.styles = this.styles;
     }
 
     await this.parseImages(zip, content);
@@ -686,8 +687,8 @@ export class HwpxParser {
         paraShape.lineSpacingType = typeMap[lineSpaceMatch[1]?.toUpperCase()] || 'percent';
       }
 
-      const caseMatch = shapeContent.match(/<hp:case[^>]*>([\s\S]*?)<\/hp:case>/i);
-      const marginSource = caseMatch ? caseMatch[1] : shapeContent;
+      const defaultMatch = shapeContent.match(/<hp:default[^>]*>([\s\S]*?)<\/hp:default>/i);
+      const marginSource = defaultMatch ? defaultMatch[1] : shapeContent;
 
       const leftMatch = marginSource.match(/<(?:hc:)?left[^>]*value="(-?\d+)"/i);
       if (leftMatch) {

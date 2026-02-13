@@ -1,10 +1,15 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import JSZip from 'jszip';
 import { HwpxEditorProvider } from './editor/HwpxEditorProvider';
+import { HwpEditorProvider } from './editor/HwpEditorProvider';
+import { HwpDocument } from './hwp/HwpDocument';
+import { HwpxParser } from './hwpx/HwpxParser';
 
 export function activate(context: vscode.ExtensionContext) {
-  // Register the custom editor
+  // Register the custom editors
   context.subscriptions.push(HwpxEditorProvider.register(context));
+  context.subscriptions.push(HwpEditorProvider.register(context));
 
   // MCP Server path
   const mcpServerPath = path.join(context.extensionPath, 'out', 'mcp-server.js');
@@ -70,6 +75,53 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('hwpx.copyMcpPath', async () => {
       await vscode.env.clipboard.writeText(mcpServerPath);
       vscode.window.showInformationMessage(`MCP Server path copied: ${mcpServerPath}`);
+    })
+  );
+
+  // Command: Convert HWP to HWPX
+  context.subscriptions.push(
+    vscode.commands.registerCommand('hwpx.convertHwpToHwpx', async (uri?: vscode.Uri) => {
+      let sourceUri = uri;
+
+      if (!sourceUri) {
+        const selected = await vscode.window.showOpenDialog({
+          canSelectMany: false,
+          filters: { 'HWP Files': ['hwp'] },
+          title: 'Select HWP file to convert'
+        });
+        if (!selected || selected.length === 0) return;
+        sourceUri = selected[0];
+      }
+
+      if (!sourceUri.fsPath.toLowerCase().endsWith('.hwp')) {
+        vscode.window.showErrorMessage('Selected file is not an HWP file.');
+        return;
+      }
+
+      const suggestedPath = sourceUri.fsPath.replace(/\.hwp$/i, '.hwpx');
+      const targetUri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(suggestedPath),
+        filters: { 'HWPX Files': ['hwpx'] },
+        title: 'Save converted HWPX file'
+      });
+      if (!targetUri) return;
+
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Converting HWP to HWPX...' },
+        async () => {
+          try {
+            const fileData = await vscode.workspace.fs.readFile(sourceUri!);
+            const content = HwpDocument.parseContent(fileData);
+            const zip = await HwpxParser.createNewHwpxZip(content);
+            const data = await zip.generateAsync({ type: 'uint8array' });
+            await vscode.workspace.fs.writeFile(targetUri!, data);
+            vscode.window.showInformationMessage(`Converted: ${path.basename(targetUri!.fsPath)}`);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            vscode.window.showErrorMessage(`Conversion failed: ${msg}`);
+          }
+        }
+      );
     })
   );
 }

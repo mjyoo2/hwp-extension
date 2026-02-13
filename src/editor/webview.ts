@@ -103,6 +103,17 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       min-height: 1000px;
       color: #000;
     }
+    .readonly-banner {
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      color: #856404;
+      padding: 12px 16px;
+      margin-bottom: 20px;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .readonly-banner .readonly-icon { font-size: 16px; }
+    .readonly-banner .file-info { opacity: 0.7; font-size: 12px; }
     .memo-panel {
       position: fixed;
       top: var(--toolbar-height);
@@ -198,6 +209,9 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       text-decoration: underline;
     }
     .section { margin-bottom: 20px; }
+    .section.columns-2 { column-count: 2; column-gap: 20pt; }
+    .section.columns-3 { column-count: 3; column-gap: 15pt; }
+    .section.columns-2 .element, .section.columns-3 .element { break-inside: avoid; }
     .element { margin-bottom: 8px; }
     .paragraph {
       line-height: 1.8;
@@ -219,6 +233,34 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
     .paragraph.align-justify { text-align: justify; }
     .paragraph.align-distribute { text-align: justify; text-justify: distribute-all-lines; }
     .paragraph.align-distributespace { text-align: justify; text-justify: distribute-all-lines; }
+    /* Outline numbering styles - 7 levels with Korean Hangul numbering conventions */
+    .document { counter-reset: outline1 outline2 outline3 outline4 outline5 outline6 outline7; }
+    .paragraph.outline-1 { counter-increment: outline1; counter-reset: outline2 outline3 outline4 outline5 outline6 outline7; }
+    .paragraph.outline-2 { counter-increment: outline2; counter-reset: outline3 outline4 outline5 outline6 outline7; }
+    .paragraph.outline-3 { counter-increment: outline3; counter-reset: outline4 outline5 outline6 outline7; }
+    .paragraph.outline-4 { counter-increment: outline4; counter-reset: outline5 outline6 outline7; }
+    .paragraph.outline-5 { counter-increment: outline5; counter-reset: outline6 outline7; }
+    .paragraph.outline-6 { counter-increment: outline6; counter-reset: outline7; }
+    .paragraph.outline-7 { counter-increment: outline7; }
+    .paragraph.outline-1::before,
+    .paragraph.outline-2::before,
+    .paragraph.outline-3::before,
+    .paragraph.outline-4::before,
+    .paragraph.outline-5::before,
+    .paragraph.outline-6::before,
+    .paragraph.outline-7::before {
+      display: inline-block;
+      min-width: 2em;
+      margin-right: 0.5em;
+      font-weight: bold;
+    }
+    .paragraph.outline-1::before { content: counter(outline1) ". "; margin-left: 0; }
+    .paragraph.outline-2::before { content: counter(outline2, upper-alpha) ". "; margin-left: 1.5em; }
+    .paragraph.outline-3::before { content: counter(outline3) ") "; margin-left: 3em; }
+    .paragraph.outline-4::before { content: "(" counter(outline4) ") "; margin-left: 4.5em; }
+    .paragraph.outline-5::before { content: counter(outline5, lower-alpha) ") "; margin-left: 6em; }
+    .paragraph.outline-6::before { content: "(" counter(outline6, lower-alpha) ") "; margin-left: 7.5em; }
+    .paragraph.outline-7::before { content: counter(outline7, lower-roman) ". "; margin-left: 9em; }
     .text-run { display: inline; }
     .text-run.bold { font-weight: bold; }
     .text-run.italic { font-style: italic; }
@@ -241,19 +283,73 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       top: -8px;
       right: -2px;
     }
-    .table-container { overflow-x: auto; }
+    .table-container { overflow-x: auto; position: relative; }
+    .image-container { position: relative; display: inline-block; }
+    .caption {
+      text-align: center;
+      font-size: 9pt;
+      color: #333;
+      padding: 4px 8px;
+      margin-top: 4px;
+      cursor: text;
+    }
+    .caption-above { margin-top: 0; margin-bottom: 4px; }
+    .caption-number { font-weight: bold; }
+    .document { counter-reset: table-counter figure-counter; }
+    .table-container.has-caption { counter-increment: table-counter; }
+    .image-container.has-caption { counter-increment: figure-counter; }
     table.hwpx-table { border-collapse: collapse; background: white; table-layout: fixed; }
     .hwpx-table td, .hwpx-table th {
       border: 1px solid #000;
       vertical-align: middle;
       word-wrap: break-word;
       overflow: hidden;
+      position: relative;
     }
     .hwpx-table td:focus-within {
       outline: 2px solid var(--vscode-focusBorder);
       outline-offset: -2px;
     }
     .hwpx-table .cell-content { min-height: 1em; outline: none; line-height: 1.4; }
+    .hwpx-table td.selected {
+      outline: 2px solid #0078d4;
+      outline-offset: -2px;
+      background-color: rgba(0, 120, 212, 0.1);
+    }
+    .col-resize-handle {
+      position: absolute;
+      top: 0;
+      right: -3px;
+      width: 6px;
+      height: 100%;
+      cursor: col-resize;
+      z-index: 10;
+      background: transparent;
+    }
+    .col-resize-handle:hover, .col-resize-handle.active {
+      background: rgba(0, 120, 212, 0.5);
+    }
+    .row-resize-handle {
+      position: absolute;
+      bottom: -3px;
+      left: 0;
+      width: 100%;
+      height: 6px;
+      cursor: row-resize;
+      z-index: 10;
+      background: transparent;
+    }
+    .row-resize-handle:hover, .row-resize-handle.active {
+      background: rgba(0, 120, 212, 0.5);
+    }
+    .resize-guide {
+      position: fixed;
+      background: #0078d4;
+      z-index: 1000;
+      pointer-events: none;
+    }
+    .resize-guide.col { width: 2px; }
+    .resize-guide.row { height: 2px; }
     .page-break { margin: 30px 0; text-align: center; position: relative; }
     .page-break-line { border: none; border-top: 2px dashed #999; margin: 0; }
     .page-break-label {
@@ -328,11 +424,230 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       border-top: 1px solid var(--vscode-statusBar-border);
     }
     .status-item { margin-right: 16px; }
+    .find-replace-dialog {
+      position: fixed;
+      top: calc(var(--toolbar-height) + 10px);
+      right: 20px;
+      background: var(--vscode-editor-background);
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      padding: 12px;
+      z-index: 1500;
+      width: 320px;
+      display: none;
+    }
+    .find-replace-dialog.visible { display: block; }
+    .find-replace-dialog h4 {
+      margin: 0 0 12px 0;
+      font-size: 14px;
+      color: var(--vscode-editor-foreground);
+    }
+    .find-replace-dialog .dialog-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .find-replace-dialog label {
+      width: 50px;
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .find-replace-dialog input[type="text"] {
+      flex: 1;
+      padding: 6px 8px;
+      border: 1px solid var(--vscode-input-border);
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border-radius: 3px;
+      font-size: 13px;
+    }
+    .find-replace-dialog .dialog-options {
+      display: flex;
+      gap: 12px;
+      margin: 8px 0;
+      font-size: 12px;
+    }
+    .find-replace-dialog .dialog-options label {
+      width: auto;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+    }
+    .find-replace-dialog .dialog-buttons {
+      display: flex;
+      gap: 6px;
+      justify-content: flex-end;
+      margin-top: 12px;
+    }
+    .find-replace-dialog button {
+      padding: 6px 12px;
+      border: none;
+      border-radius: 3px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .find-replace-dialog button.primary {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+    .find-replace-dialog button.secondary {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+    .find-replace-dialog .close-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: transparent;
+      border: none;
+      font-size: 16px;
+      cursor: pointer;
+      color: var(--vscode-editor-foreground);
+      padding: 4px;
+    }
+    .find-replace-dialog .result-info {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+      margin-top: 4px;
+    }
+    .highlight-search {
+      background-color: #ffff00;
+      color: #000;
+    }
+    .highlight-current {
+      background-color: #ff9632;
+      color: #000;
+    }
+    .hyperlink-dialog {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: var(--vscode-editor-background);
+      border: 1px solid var(--vscode-panel-border);
+      padding: 16px;
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 2000;
+      min-width: 350px;
+    }
+    .hyperlink-dialog.visible { display: block; }
+    .hyperlink-dialog h4 {
+      margin: 0 0 12px 0;
+      font-size: 14px;
+      color: var(--vscode-editor-foreground);
+    }
+    .hyperlink-dialog .dialog-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .hyperlink-dialog label {
+      width: 80px;
+      font-size: 12px;
+      color: var(--vscode-editor-foreground);
+    }
+    .hyperlink-dialog input[type="text"] {
+      flex: 1;
+      padding: 6px 8px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border);
+      border-radius: 3px;
+      font-size: 12px;
+    }
+    .hyperlink-dialog .dialog-buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .hyperlink-dialog button {
+      padding: 6px 12px;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .hyperlink-dialog button.primary {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+    .hyperlink-dialog button.secondary {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+    .hyperlink-dialog .close-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: none;
+      border: none;
+      font-size: 18px;
+      cursor: pointer;
+      color: var(--vscode-editor-foreground);
+    }
+    .text-run a, .paragraph a {
+      color: #0066cc;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    .text-run a:hover, .paragraph a:hover {
+      color: #004499;
+    }
+    .toc-container {
+      margin: 16px 0;
+      padding: 12px 16px;
+      border: 1px solid #ddd;
+      background: #f9f9f9;
+    }
+    .toc-title {
+      font-size: 14pt;
+      font-weight: bold;
+      margin-bottom: 12px;
+      color: #333;
+    }
+    .toc-entry {
+      padding: 4px 0;
+      cursor: pointer;
+      color: #333;
+    }
+    .toc-entry:hover {
+      color: #0066cc;
+      text-decoration: underline;
+    }
+    .toc-entry.toc-level-1 { margin-left: 0; font-weight: bold; }
+    .toc-entry.toc-level-2 { margin-left: 1.5em; }
+    .toc-entry.toc-level-3 { margin-left: 3em; }
+    .toc-entry.toc-level-4 { margin-left: 4.5em; }
+    .toc-entry.toc-level-5 { margin-left: 6em; }
+    .toc-entry.toc-level-6 { margin-left: 7.5em; }
+    .toc-entry.toc-level-7 { margin-left: 9em; }
+    .toc-page-num {
+      float: right;
+      color: #666;
+    }
   </style>
 </head>
 <body>
   <div class="toolbar">
     <div class="toolbar-row">
+      <div class="toolbar-group">
+        <select id="styleSelect" title="Paragraph Style" style="width:90px;">
+          <option value="">스타일</option>
+          <option value="title">제목</option>
+          <option value="heading1">제목 1</option>
+          <option value="heading2">제목 2</option>
+          <option value="heading3">제목 3</option>
+          <option value="body">본문</option>
+          <option value="caption">캡션</option>
+          <option value="quote">인용</option>
+        </select>
+      </div>
       <div class="toolbar-group">
         <select id="fontFamily" title="Font">
           <option value="Malgun Gothic">맑은 고딕</option>
@@ -364,6 +679,16 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       <div class="toolbar-group">
         <button id="bulletList" title="Bullet List">&#8226; &#8212;</button>
         <button id="numberList" title="Numbered List">1. &#8212;</button>
+        <select id="outlineLevel" title="Outline Level" style="width:70px;">
+          <option value="">개요</option>
+          <option value="1">1수준</option>
+          <option value="2">2수준</option>
+          <option value="3">3수준</option>
+          <option value="4">4수준</option>
+          <option value="5">5수준</option>
+          <option value="6">6수준</option>
+          <option value="7">7수준</option>
+        </select>
       </div>
       <div class="toolbar-group">
         <button id="indentDecrease" title="Decrease Indent"><svg width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M1 2h14v2H1zM5 6h10v2H5zM5 10h10v2H5zM1 14h14v2H1zM1 6l3 2-3 2z"/></svg></button>
@@ -385,10 +710,23 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       <div class="toolbar-group">
         <button id="insertTable" title="Insert Table">&#8862;</button>
         <button id="insertLink" title="Insert Hyperlink">&#128279;</button>
+        <button id="insertToc" title="Insert Table of Contents">&#128209;</button>
       </div>
       <div class="toolbar-group">
         <button id="superscript" title="Superscript">x&#178;</button>
         <button id="subscript" title="Subscript">x&#8322;</button>
+      </div>
+      <div class="toolbar-group">
+        <label style="font-size:11px;margin-right:4px;">Columns:</label>
+        <select id="columnCount" title="Column Count" style="width:60px;">
+          <option value="1">1단</option>
+          <option value="2">2단</option>
+          <option value="3">3단</option>
+        </select>
+      </div>
+      <div class="toolbar-group">
+        <button id="findReplaceBtn" title="Find/Replace (Ctrl+H)">&#128269;</button>
+        <button id="bookmarkBtn" title="Bookmark">&#128278;</button>
       </div>
     </div>
   </div>
@@ -402,15 +740,64 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
     <div class="context-menu-item" data-action="copy">Copy</div>
     <div class="context-menu-item" data-action="paste">Paste</div>
     <div class="context-menu-separator"></div>
-    <div class="context-menu-item" data-action="insertParagraph">Insert Paragraph</div>
-    <div class="context-menu-item" data-action="deleteParagraph">Delete Paragraph</div>
-    <div class="context-menu-separator"></div>
-    <div class="context-menu-item" data-action="insertRowBelow">Insert Row Below</div>
-    <div class="context-menu-item" data-action="deleteRow">Delete Row</div>
+    <div class="context-menu-item para-only" data-action="insertParagraph">Insert Paragraph</div>
+    <div class="context-menu-item para-only" data-action="deleteParagraph">Delete Paragraph</div>
+    <div class="context-menu-separator table-only"></div>
+    <div class="context-menu-item table-only" data-action="insertRowAbove">Insert Row Above</div>
+    <div class="context-menu-item table-only" data-action="insertRowBelow">Insert Row Below</div>
+    <div class="context-menu-item table-only" data-action="deleteRow">Delete Row</div>
+    <div class="context-menu-separator table-only"></div>
+    <div class="context-menu-item table-only" data-action="insertColumnLeft">Insert Column Left</div>
+    <div class="context-menu-item table-only" data-action="insertColumnRight">Insert Column Right</div>
+    <div class="context-menu-item table-only" data-action="deleteColumn">Delete Column</div>
+    <div class="context-menu-separator table-only multi-cell"></div>
+    <div class="context-menu-item table-only multi-cell" data-action="mergeCells">Merge Cells</div>
+    <div class="context-menu-separator captionable-only"></div>
+    <div class="context-menu-item captionable-only" data-action="addCaption">Add Caption</div>
+    <div class="context-menu-item captionable-only" data-action="editCaption">Edit Caption</div>
   </div>
   <div class="memo-panel hidden" id="memoPanel">
     <div class="memo-panel-header">메모</div>
     <div id="memoList"></div>
+  </div>
+  <div class="find-replace-dialog" id="findReplaceDialog">
+    <button class="close-btn" id="closeFindReplace">&times;</button>
+    <h4>찾기/바꾸기</h4>
+    <div class="dialog-row">
+      <label>찾기:</label>
+      <input type="text" id="findInput" placeholder="찾을 내용">
+    </div>
+    <div class="dialog-row">
+      <label>바꾸기:</label>
+      <input type="text" id="replaceInput" placeholder="바꿀 내용">
+    </div>
+    <div class="dialog-options">
+      <label><input type="checkbox" id="matchCase"> 대/소문자 구분</label>
+      <label><input type="checkbox" id="wholeWord"> 단어 단위</label>
+    </div>
+    <div class="result-info" id="findResultInfo"></div>
+    <div class="dialog-buttons">
+      <button class="secondary" id="findPrev">이전</button>
+      <button class="secondary" id="findNext">다음</button>
+      <button class="secondary" id="replaceOne">바꾸기</button>
+      <button class="primary" id="replaceAll">모두 바꾸기</button>
+    </div>
+  </div>
+  <div class="hyperlink-dialog" id="hyperlinkDialog">
+    <button class="close-btn" id="closeHyperlink">&times;</button>
+    <h4>하이퍼링크 삽입</h4>
+    <div class="dialog-row">
+      <label>표시 텍스트:</label>
+      <input type="text" id="linkText" placeholder="링크로 표시될 텍스트">
+    </div>
+    <div class="dialog-row">
+      <label>URL:</label>
+      <input type="text" id="linkUrl" placeholder="https://example.com">
+    </div>
+    <div class="dialog-buttons">
+      <button class="secondary" id="cancelHyperlink">취소</button>
+      <button class="primary" id="insertHyperlink">삽입</button>
+    </div>
   </div>
   <div class="status-bar">
     <span class="status-item" id="statusWordCount">Words: 0</span>
@@ -419,15 +806,28 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
     const vscode = acquireVsCodeApi();
     let documentContent = null;
     let selectedElement = null;
+    let isReadOnlyMode = false;
 
     function renderDocument(content) {
       documentContent = content;
+      isReadOnlyMode = content.isReadOnly === true;
       const container = document.getElementById('document');
       if (!content || !content.sections || content.sections.length === 0) {
         container.innerHTML = '<div class="loading">No content found in document</div>';
         return;
       }
       let html = '';
+      
+      if (isReadOnlyMode) {
+        html += '<div class="readonly-banner">';
+        html += '<span class="readonly-icon">&#128274;</span> ';
+        html += 'HWP 파일은 읽기 전용입니다. 편집하려면 HWPX로 변환하세요.';
+        if (content.fileInfo) {
+          html += ' <span class="file-info">(버전: ' + (content.fileInfo.version || 'Unknown') + ')</span>';
+        }
+        html += '</div>';
+      }
+      
       if (content.metadata) {
         const meta = content.metadata;
         html += '<div class="metadata">';
@@ -444,7 +844,10 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
         if (sectionIndex > 0) {
           html += '<div class="section-break"><hr class="section-break-line"><span class="section-break-label">섹션 ' + (sectionIndex + 1) + '</span></div>';
         }
-        html += '<div class="section" data-section="' + sectionIndex + '">';
+        let sectionClasses = ['section'];
+        const colCount = section.columnDef?.count || 1;
+        if (colCount >= 2 && colCount <= 3) sectionClasses.push('columns-' + colCount);
+        html += '<div class="' + sectionClasses.join(' ') + '" data-section="' + sectionIndex + '" data-columns="' + colCount + '">';
         section.elements.forEach((element, elementIndex) => {
           html += renderElement(element, sectionIndex, elementIndex);
         });
@@ -558,8 +961,64 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
         case 'edit': return renderEdit(element.data, sectionIndex, elementIndex);
         case 'listbox': return renderListBox(element.data, sectionIndex, elementIndex);
         case 'scrollbar': return renderScrollBar(element.data, sectionIndex, elementIndex);
+        case 'header': return renderHeaderFooter(element.data, 'header', sectionIndex, elementIndex);
+        case 'footer': return renderHeaderFooter(element.data, 'footer', sectionIndex, elementIndex);
+        case 'footnote': return renderFootnoteEndnote(element.data, 'footnote', sectionIndex, elementIndex);
+        case 'endnote': return renderFootnoteEndnote(element.data, 'endnote', sectionIndex, elementIndex);
+        case 'video': return renderVideo(element.data, sectionIndex, elementIndex);
+        case 'chart': return renderChart(element.data, sectionIndex, elementIndex);
         default: return '';
       }
+    }
+
+    function renderHeaderFooter(data, hfType, sectionIndex, elementIndex) {
+      let html = '<div class="element hwpx-' + hfType + '" data-section="' + sectionIndex + '" data-element="' + elementIndex + '" data-type="' + hfType + '" ';
+      html += 'style="border-top:1px dashed #ccc;border-bottom:1px dashed #ccc;padding:8px 0;margin:4px 0;color:#666;font-size:0.9em;">';
+      if (data.paragraphs) {
+        data.paragraphs.forEach(function(para, pIndex) {
+          html += '<div class="' + hfType + '-para">';
+          para.runs.forEach(function(run, runIndex) {
+            html += renderTextRun(run, runIndex);
+          });
+          if (para.runs.length === 0 || para.runs.every(function(r) { return !r.text; })) html += '<br>';
+          html += '</div>';
+        });
+      }
+      html += '</div>';
+      return html;
+    }
+
+    function renderFootnoteEndnote(data, noteType, sectionIndex, elementIndex) {
+      let html = '<div class="element hwpx-' + noteType + '" data-section="' + sectionIndex + '" data-element="' + elementIndex + '" data-type="' + noteType + '" ';
+      html += 'style="border-top:1px solid #ccc;padding:4px 0;margin:2px 0;font-size:0.85em;color:#555;">';
+      html += '<span style="font-weight:bold;margin-right:4px;">' + (data.number || '') + '</span>';
+      if (data.paragraphs) {
+        data.paragraphs.forEach(function(para, pIndex) {
+          html += '<span>';
+          para.runs.forEach(function(run, runIndex) {
+            html += renderTextRun(run, runIndex);
+          });
+          html += '</span>';
+        });
+      }
+      html += '</div>';
+      return html;
+    }
+
+    function renderVideo(video, sectionIndex, elementIndex) {
+      let html = '<div class="element hwpx-video" data-section="' + sectionIndex + '" data-element="' + elementIndex + '" data-type="video" ';
+      html += 'style="padding:16px;margin:8px 0;background:#f0f0f0;text-align:center;border:1px dashed #999;">';
+      html += '<span style="color:#666;">[Video: ' + escapeHtml(video.src || 'embedded') + ']</span>';
+      html += '</div>';
+      return html;
+    }
+
+    function renderChart(chart, sectionIndex, elementIndex) {
+      let html = '<div class="element hwpx-chart" data-section="' + sectionIndex + '" data-element="' + elementIndex + '" data-type="chart" ';
+      html += 'style="padding:16px;margin:8px 0;background:#f8f8f0;text-align:center;border:1px dashed #999;">';
+      html += '<span style="color:#666;">[Chart]</span>';
+      html += '</div>';
+      return html;
     }
 
     function renderParagraph(paragraph, sectionIndex, elementIndex) {
@@ -575,6 +1034,9 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       if (style.align) classes.push('align-' + style.align.toLowerCase());
       if (paragraph.listType && paragraph.listType !== 'none') {
         classes.push('list-item', paragraph.listType);
+      }
+      if (paragraph.outlineLevel && paragraph.outlineLevel >= 1 && paragraph.outlineLevel <= 7) {
+        classes.push('outline-' + paragraph.outlineLevel);
       }
       let inlineStyle = '';
       if (style.lineSpacing) inlineStyle += 'line-height: ' + (style.lineSpacing / 100) + ';';
@@ -605,9 +1067,11 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
         if (firstLineIndent > 0) inlineStyle += 'text-indent: ' + firstLineIndent + 'pt;';
       }
 
-      html += '<div class="' + classes.join(' ') + '" contenteditable="true" ';
+      const editableAttr = isReadOnlyMode ? '' : 'contenteditable="true" ';
+      html += '<div class="' + classes.join(' ') + '" ' + editableAttr;
       html += 'data-section="' + sectionIndex + '" data-element="' + elementIndex + '" data-type="paragraph" ';
       if (paragraph.listType === 'number') html += 'data-number="' + (elementIndex + 1) + '" ';
+      if (paragraph.outlineLevel) html += 'data-outline-level="' + paragraph.outlineLevel + '" ';
       if (style.keepWithNext) html += 'data-keep-with-next="1" ';
       if (style.keepLines) html += 'data-keep-lines="1" ';
       // Add lineseg layout info (vertpos and height in pt)
@@ -734,8 +1198,15 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
         const lastSeg = table.linesegs[table.linesegs.length - 1];
         linesegAttrs = ' data-vertpos="' + firstSeg.vertpos + '" data-vertend="' + (lastSeg.vertpos + lastSeg.vertsize) + '"';
       }
-      let html = '<div class="element table-container" data-section="' + sectionIndex + '" data-element="' + elementIndex + '" data-type="table"' +
+      const hasCaption = table.caption ? ' has-caption' : '';
+      let html = '<div class="element table-container' + hasCaption + '" data-section="' + sectionIndex + '" data-element="' + elementIndex + '" data-type="table"' +
         linesegAttrs + (containerStyle ? ' style="' + containerStyle + '"' : '') + '>';
+      if (table.caption && table.captionPosition === 'above') {
+        html += '<div class="caption caption-above" ' + (isReadOnlyMode ? '' : 'contenteditable="true" ') + 'data-caption-for="table">';
+        html += '<span class="caption-number">표 </span>';
+        html += '<span class="caption-text">' + escapeHtml(table.caption) + '</span>';
+        html += '</div>';
+      }
 
       let tableStyle = 'border-collapse: collapse; table-layout: fixed;';
       if (table.width) {
@@ -815,7 +1286,7 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
                     if (firstLineIndentVal > 0) paraStyle += 'text-indent:' + firstLineIndentVal + 'pt;';
                   }
                 }
-                html += '<div class="cell-content" contenteditable="true" data-para="' + elIndex + '"' + (paraStyle ? ' style="' + paraStyle + '"' : '') + '>';
+                html += '<div class="cell-content" ' + (isReadOnlyMode ? '' : 'contenteditable="true" ') + 'data-para="' + elIndex + '"' + (paraStyle ? ' style="' + paraStyle + '"' : '') + '>';
                 p.runs.forEach((run, runIndex) => {
                   html += renderTextRun(run, runIndex);
                 });
@@ -823,6 +1294,10 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
                 html += '</div>';
               } else if (el.type === 'table') {
                 html += renderNestedTable(el.data);
+              } else if (el.type === 'image') {
+                html += renderImage(el.data, sectionIndex, elementIndex);
+              } else if (el.type === 'equation') {
+                html += renderEquation(el.data, sectionIndex, elementIndex);
               }
             });
           } else {
@@ -847,13 +1322,21 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
                   if (firstLineIndentVal > 0) paraStyle += 'text-indent:' + firstLineIndentVal + 'pt;';
                 }
               }
-              html += '<div class="cell-content" contenteditable="true" data-para="' + pIndex + '"' + (paraStyle ? ' style="' + paraStyle + '"' : '') + '>';
+              html += '<div class="cell-content" ' + (isReadOnlyMode ? '' : 'contenteditable="true" ') + 'data-para="' + pIndex + '"' + (paraStyle ? ' style="' + paraStyle + '"' : '') + '>';
               p.runs.forEach((run, runIndex) => {
                 html += renderTextRun(run, runIndex);
               });
               if (p.runs.length === 0 || p.runs.every(r => !r.text && !r.tab)) html += '<br>';
               html += '</div>';
             });
+          }
+          const isLastCol = cellIndex === row.cells.length - 1 || (cell.colSpan && cellIndex + cell.colSpan >= row.cells.length);
+          const isLastRow = rowIndex === table.rows.length - 1 || (cell.rowSpan && rowIndex + cell.rowSpan >= table.rows.length);
+          if (!isLastCol) {
+            html += '<div class="col-resize-handle" data-col="' + cellIndex + '"></div>';
+          }
+          if (!isLastRow) {
+            html += '<div class="row-resize-handle" data-row="' + rowIndex + '"></div>';
           }
           html += '</td>';
         });
@@ -953,11 +1436,24 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
         html += '</tr>';
       });
       html += '</table>';
+      if (table.caption && table.captionPosition !== 'above') {
+        html += '<div class="caption" ' + (isReadOnlyMode ? '' : 'contenteditable="true" ') + 'data-caption-for="table">';
+        html += '<span class="caption-number">표 </span>';
+        html += '<span class="caption-text">' + escapeHtml(table.caption) + '</span>';
+        html += '</div>';
+      }
       return html;
     }
 
     function renderImage(image, sectionIndex, elementIndex) {
-      let html = '<div class="element image-container" data-section="' + sectionIndex + '" data-element="' + elementIndex + '" data-type="image">';
+      const hasCaption = image.caption ? ' has-caption' : '';
+      let html = '<div class="element image-container' + hasCaption + '" data-section="' + sectionIndex + '" data-element="' + elementIndex + '" data-type="image">';
+      if (image.caption && image.captionPosition === 'above') {
+        html += '<div class="caption caption-above" ' + (isReadOnlyMode ? '' : 'contenteditable="true" ') + 'data-caption-for="figure">';
+        html += '<span class="caption-number">그림 </span>';
+        html += '<span class="caption-text">' + escapeHtml(image.caption) + '</span>';
+        html += '</div>';
+      }
       if (image.data) {
         html += '<img src="' + image.data + '" ';
         if (image.width) html += 'width="' + image.width + '" ';
@@ -965,6 +1461,12 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
         html += '/>';
       } else {
         html += '<div style="padding:20px;background:#f0f0f0;color:#666;">[Image: ' + escapeHtml(image.binaryId) + ']</div>';
+      }
+      if (image.caption && image.captionPosition !== 'above') {
+        html += '<div class="caption" ' + (isReadOnlyMode ? '' : 'contenteditable="true" ') + 'data-caption-for="figure">';
+        html += '<span class="caption-number">그림 </span>';
+        html += '<span class="caption-text">' + escapeHtml(image.caption) + '</span>';
+        html += '</div>';
       }
       html += '</div>';
       return html;
@@ -1024,9 +1526,10 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       if (textbox.paragraphs) {
         textbox.paragraphs.forEach(function(para, pIndex) {
           html += '<div class="textbox-para">';
-          para.runs.forEach(function(run) {
-            html += escapeHtml(run.text);
+          para.runs.forEach(function(run, runIndex) {
+            html += renderTextRun(run, runIndex);
           });
+          if (para.runs.length === 0 || para.runs.every(function(r) { return !r.text; })) html += '<br>';
           html += '</div>';
         });
       }
@@ -1184,16 +1687,24 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
     }
 
     function renderContainerChild(child, index) {
-      if (child.points) {
+      if (child.paragraphs) {
+        return renderTextBox(child, 0, index);
+      } else if (child.points) {
         return renderPolygon(child, 0, index);
       } else if (child.segments) {
         return renderCurve(child, 0, index);
-      } else if (child.centerX !== undefined) {
+      } else if (child.centerX !== undefined && child.axis1X !== undefined) {
         return renderArc(child, 0, index);
-      } else if (child.binaryId) {
+      } else if (child.rx !== undefined || child.ry !== undefined) {
+        return renderEllipse(child, 0, index);
+      } else if (child.binaryId || child.data) {
         return renderImage(child, 0, index);
       } else if (child.children) {
         return renderContainer(child, 0, index);
+      } else if (child.startX !== undefined && child.endX !== undefined) {
+        return renderLine(child, 0, index);
+      } else if (child.width !== undefined && child.height !== undefined) {
+        return renderRect(child, 0, index);
       }
       return '<div>[Child Object]</div>';
     }
@@ -1374,6 +1885,11 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       if (span.classList.contains('italic')) style.italic = true;
       if (span.classList.contains('underline')) style.underline = true;
       if (span.classList.contains('strikethrough')) style.strikethrough = true;
+      const computed = span.style;
+      if (computed.fontFamily) style.fontName = computed.fontFamily.replace(/['"]/g, '');
+      if (computed.fontSize) style.fontSize = parseFloat(computed.fontSize);
+      if (computed.color && computed.color !== '') style.fontColor = computed.color;
+      if (computed.backgroundColor && computed.backgroundColor !== '') style.backgroundColor = computed.backgroundColor;
       return style;
     }
 
@@ -1444,8 +1960,26 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       const menu = document.getElementById('contextMenu');
       menu.style.left = e.clientX + 'px';
       menu.style.top = e.clientY + 'px';
-      menu.classList.add('visible');
+      
       selectedElement = e.target.closest('.element');
+      const isTable = selectedElement && selectedElement.dataset.type === 'table';
+      const hasMultipleSelectedCells = selectedCells.length > 1;
+      
+      menu.querySelectorAll('.table-only').forEach(el => {
+        el.style.display = isTable ? '' : 'none';
+      });
+      menu.querySelectorAll('.para-only').forEach(el => {
+        el.style.display = isTable ? 'none' : '';
+      });
+      menu.querySelectorAll('.multi-cell').forEach(el => {
+        el.style.display = (isTable && hasMultipleSelectedCells) ? '' : 'none';
+      });
+      const isCaptionable = selectedElement && (selectedElement.dataset.type === 'table' || selectedElement.dataset.type === 'image');
+      menu.querySelectorAll('.captionable-only').forEach(el => {
+        el.style.display = isCaptionable ? '' : 'none';
+      });
+      
+      menu.classList.add('visible');
     }
 
     document.addEventListener('click', () => {
@@ -1461,6 +1995,22 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       const sectionIndex = parseInt(selectedElement.dataset.section, 10);
       const elementIndex = parseInt(selectedElement.dataset.element, 10);
       const type = selectedElement.dataset.type;
+      
+      function getActiveRow() {
+        if (selectedCells.length > 0) {
+          return selectedCells[0].closest('tr');
+        }
+        return selectedElement.querySelector('tr:focus-within, tr:last-child');
+      }
+      
+      function getActiveCol() {
+        if (selectedCells.length > 0) {
+          return parseInt(selectedCells[0].dataset.cell) || 0;
+        }
+        const focusedCell = selectedElement.querySelector('td:focus-within');
+        return focusedCell ? (parseInt(focusedCell.dataset.cell) || 0) : 0;
+      }
+      
       switch (action) {
         case 'insertParagraph':
           vscode.postMessage({ type: 'insertParagraph', sectionIndex, afterElementIndex: elementIndex });
@@ -1468,21 +2018,67 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
         case 'deleteParagraph':
           vscode.postMessage({ type: 'deleteParagraph', sectionIndex, elementIndex });
           break;
+        case 'insertRowAbove':
+          if (type === 'table') {
+            const row = getActiveRow();
+            const rowIndex = row ? parseInt(row.dataset.row, 10) : 0;
+            vscode.postMessage({ type: 'insertTableRow', sectionIndex, elementIndex, afterRowIndex: Math.max(0, rowIndex - 1), insertAbove: true });
+          }
+          break;
         case 'insertRowBelow':
           if (type === 'table') {
-            const row = selectedElement.querySelector('tr:focus-within, tr:last-child');
+            const row = getActiveRow();
             vscode.postMessage({ type: 'insertTableRow', sectionIndex, elementIndex, afterRowIndex: row ? parseInt(row.dataset.row, 10) : 0 });
           }
           break;
         case 'deleteRow':
           if (type === 'table') {
-            const row = selectedElement.querySelector('tr:focus-within');
+            const row = getActiveRow();
             if (row) vscode.postMessage({ type: 'deleteTableRow', sectionIndex, elementIndex, rowIndex: parseInt(row.dataset.row, 10) });
+          }
+          break;
+        case 'insertColumnLeft':
+          if (type === 'table') {
+            const colIndex = getActiveCol();
+            vscode.postMessage({ type: 'insertTableColumn', sectionIndex, elementIndex, colIndex, insertLeft: true });
+          }
+          break;
+        case 'insertColumnRight':
+          if (type === 'table') {
+            const colIndex = getActiveCol();
+            vscode.postMessage({ type: 'insertTableColumn', sectionIndex, elementIndex, colIndex, insertLeft: false });
+          }
+          break;
+        case 'deleteColumn':
+          if (type === 'table') {
+            const colIndex = getActiveCol();
+            vscode.postMessage({ type: 'deleteTableColumn', sectionIndex, elementIndex, colIndex });
+          }
+          break;
+        case 'mergeCells':
+          if (type === 'table' && selectedCells.length > 1) {
+            const positions = selectedCells.map(td => getCellPosition(td));
+            const startRow = Math.min(...positions.map(p => p.rowIndex));
+            const endRow = Math.max(...positions.map(p => p.rowIndex));
+            const startCol = Math.min(...positions.map(p => p.cellIndex));
+            const endCol = Math.max(...positions.map(p => p.cellIndex));
+            vscode.postMessage({ type: 'mergeTableCells', sectionIndex, elementIndex, startRow, startCol, endRow, endCol });
           }
           break;
         case 'cut': document.execCommand('cut'); break;
         case 'copy': document.execCommand('copy'); break;
         case 'paste': document.execCommand('paste'); break;
+        case 'addCaption':
+        case 'editCaption':
+          if (type === 'table' || type === 'image') {
+            const existingCaption = selectedElement.querySelector('.caption-text');
+            const currentText = existingCaption ? existingCaption.textContent : '';
+            const newCaption = prompt('캡션을 입력하세요:', currentText);
+            if (newCaption !== null) {
+              vscode.postMessage({ type: 'setCaption', sectionIndex, elementIndex, caption: newCaption, captionPosition: 'below' });
+            }
+          }
+          break;
       }
     }
 
@@ -1522,7 +2118,63 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       document.getElementById('italicBtn').classList.toggle('active', isStyleActive('italic'));
       document.getElementById('underlineBtn').classList.toggle('active', isStyleActive('underline'));
       document.getElementById('strikeBtn').classList.toggle('active', isStyleActive('strikethrough'));
+      const outlineSelect = document.getElementById('outlineLevel');
+      if (selectedElement && selectedElement.classList.contains('paragraph')) {
+        const level = selectedElement.dataset.outlineLevel || '';
+        outlineSelect.value = level;
+      } else {
+        outlineSelect.value = '';
+      }
+      const columnSelect = document.getElementById('columnCount');
+      const section = selectedElement ? selectedElement.closest('.section') : document.querySelector('.section');
+      if (section) {
+        columnSelect.value = section.dataset.columns || '1';
+      }
     }
+
+    const predefinedStyles = {
+      title: { fontSize: 22, fontWeight: 'bold', align: 'center', lineSpacing: 180, marginBottom: 20 },
+      heading1: { fontSize: 16, fontWeight: 'bold', align: 'left', lineSpacing: 160, marginTop: 16, marginBottom: 8 },
+      heading2: { fontSize: 14, fontWeight: 'bold', align: 'left', lineSpacing: 160, marginTop: 12, marginBottom: 6 },
+      heading3: { fontSize: 12, fontWeight: 'bold', align: 'left', lineSpacing: 160, marginTop: 8, marginBottom: 4 },
+      body: { fontSize: 10, fontWeight: 'normal', align: 'justify', lineSpacing: 160, firstLineIndent: 10 },
+      caption: { fontSize: 9, fontWeight: 'normal', align: 'center', lineSpacing: 140 },
+      quote: { fontSize: 10, fontWeight: 'normal', fontStyle: 'italic', align: 'left', lineSpacing: 150, marginLeft: 20, marginRight: 20 }
+    };
+
+    document.getElementById('styleSelect').addEventListener('change', (e) => {
+      const styleName = e.target.value;
+      if (!styleName || !selectedElement || !selectedElement.classList.contains('paragraph')) return;
+      
+      const style = predefinedStyles[styleName];
+      if (!style) return;
+      
+      const sectionIndex = parseInt(selectedElement.dataset.section, 10);
+      const elementIndex = parseInt(selectedElement.dataset.element, 10);
+      
+      if (style.fontSize) {
+        vscode.postMessage({
+          type: 'applyCharacterStyle',
+          sectionIndex, elementIndex, runIndex: 0,
+          style: { fontSize: style.fontSize, bold: style.fontWeight === 'bold', italic: style.fontStyle === 'italic' }
+        });
+      }
+      
+      const paraStyleProps = {};
+      if (style.align) paraStyleProps.align = style.align;
+      if (style.lineSpacing) paraStyleProps.lineSpacing = style.lineSpacing;
+      if (style.marginTop) paraStyleProps.marginTop = style.marginTop;
+      if (style.marginBottom) paraStyleProps.marginBottom = style.marginBottom;
+      if (style.marginLeft) paraStyleProps.marginLeft = style.marginLeft;
+      if (style.marginRight) paraStyleProps.marginRight = style.marginRight;
+      if (style.firstLineIndent) paraStyleProps.firstLineIndent = style.firstLineIndent;
+      
+      if (Object.keys(paraStyleProps).length > 0) {
+        vscode.postMessage({ type: 'applyParagraphStyle', sectionIndex, elementIndex, style: paraStyleProps });
+      }
+      
+      e.target.value = '';
+    });
 
     document.getElementById('boldBtn').addEventListener('click', () => applyCharStyle('bold'));
     document.getElementById('italicBtn').addEventListener('click', () => applyCharStyle('italic'));
@@ -1609,6 +2261,43 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
           runIndex: 0,
           style: { subscript: true, superscript: false }
         });
+      }
+    });
+
+    document.getElementById('outlineLevel').addEventListener('change', (e) => {
+      if (selectedElement && selectedElement.classList.contains('paragraph')) {
+        const level = e.target.value ? parseInt(e.target.value, 10) : 0;
+        vscode.postMessage({
+          type: 'setOutlineLevel',
+          sectionIndex: parseInt(selectedElement.dataset.section, 10),
+          elementIndex: parseInt(selectedElement.dataset.element, 10),
+          outlineLevel: level
+        });
+        for (let i = 1; i <= 7; i++) {
+          selectedElement.classList.remove('outline-' + i);
+        }
+        if (level >= 1 && level <= 7) {
+          selectedElement.classList.add('outline-' + level);
+          selectedElement.dataset.outlineLevel = level;
+        } else {
+          delete selectedElement.dataset.outlineLevel;
+        }
+      }
+    });
+
+    document.getElementById('columnCount').addEventListener('change', (e) => {
+      const section = selectedElement ? selectedElement.closest('.section') : document.querySelector('.section');
+      if (section) {
+        const count = parseInt(e.target.value, 10);
+        const sectionIndex = parseInt(section.dataset.section, 10);
+        vscode.postMessage({
+          type: 'setColumnCount',
+          sectionIndex: sectionIndex,
+          columnCount: count
+        });
+        section.classList.remove('columns-2', 'columns-3');
+        if (count >= 2 && count <= 3) section.classList.add('columns-' + count);
+        section.dataset.columns = count;
       }
     });
 
@@ -1831,7 +2520,6 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
 
     document.addEventListener('selectionchange', updateToolbarState);
 
-    // Global keyboard handler for undo/redo
     document.addEventListener('keydown', function(e) {
       if (e.ctrlKey || e.metaKey) {
         if (e.key.toLowerCase() === 'z') {
@@ -1846,6 +2534,275 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
           vscode.postMessage({ type: 'redo' });
         }
       }
+      
+      const activeEl = document.activeElement;
+      const inTableCell = activeEl && activeEl.closest('td');
+      
+      if (inTableCell && (e.key === 'Tab' || e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        const td = activeEl.closest('td');
+        const tr = td.closest('tr');
+        const table = td.closest('table');
+        const rows = Array.from(table.querySelectorAll('tr'));
+        const rowIndex = rows.indexOf(tr);
+        const cells = Array.from(tr.querySelectorAll('td'));
+        const cellIndex = cells.indexOf(td);
+        
+        let nextTd = null;
+        
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          if (e.shiftKey) {
+            if (cellIndex > 0) {
+              nextTd = cells[cellIndex - 1];
+            } else if (rowIndex > 0) {
+              const prevRowCells = Array.from(rows[rowIndex - 1].querySelectorAll('td'));
+              nextTd = prevRowCells[prevRowCells.length - 1];
+            }
+          } else {
+            if (cellIndex < cells.length - 1) {
+              nextTd = cells[cellIndex + 1];
+            } else if (rowIndex < rows.length - 1) {
+              const nextRowCells = Array.from(rows[rowIndex + 1].querySelectorAll('td'));
+              nextTd = nextRowCells[0];
+            }
+          }
+        } else if (e.key === 'ArrowUp' && rowIndex > 0) {
+          const prevRowCells = Array.from(rows[rowIndex - 1].querySelectorAll('td'));
+          nextTd = prevRowCells[Math.min(cellIndex, prevRowCells.length - 1)];
+        } else if (e.key === 'ArrowDown' && rowIndex < rows.length - 1) {
+          const nextRowCells = Array.from(rows[rowIndex + 1].querySelectorAll('td'));
+          nextTd = nextRowCells[Math.min(cellIndex, nextRowCells.length - 1)];
+        } else if (e.key === 'ArrowLeft' && cellIndex > 0) {
+          const sel = window.getSelection();
+          if (sel.rangeCount > 0 && sel.getRangeAt(0).startOffset === 0) {
+            nextTd = cells[cellIndex - 1];
+          }
+        } else if (e.key === 'ArrowRight' && cellIndex < cells.length - 1) {
+          const sel = window.getSelection();
+          const range = sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+          if (range && range.endContainer.textContent && range.endOffset === range.endContainer.textContent.length) {
+            nextTd = cells[cellIndex + 1];
+          }
+        }
+        
+        if (nextTd) {
+          const cellContent = nextTd.querySelector('.cell-content');
+          if (cellContent) {
+            cellContent.focus();
+            const range = document.createRange();
+            range.selectNodeContents(cellContent);
+            range.collapse(e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey));
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+        }
+      }
+    });
+
+    let resizeState = null;
+    let resizeGuide = null;
+    let selectedCells = [];
+    let selectionAnchor = null;
+
+    function clearCellSelection() {
+      selectedCells.forEach(td => td.classList.remove('selected'));
+      selectedCells = [];
+      selectionAnchor = null;
+    }
+
+    function selectCell(td) {
+      if (!td.classList.contains('selected')) {
+        td.classList.add('selected');
+        selectedCells.push(td);
+      }
+    }
+
+    function getCellPosition(td) {
+      const tr = td.closest('tr');
+      const table = td.closest('table');
+      const rows = Array.from(table.querySelectorAll('tr'));
+      const rowIndex = rows.indexOf(tr);
+      const cellIndex = parseInt(td.dataset.cell) || Array.from(tr.children).indexOf(td);
+      return { rowIndex, cellIndex, table };
+    }
+
+    function selectCellRange(startTd, endTd) {
+      const startPos = getCellPosition(startTd);
+      const endPos = getCellPosition(endTd);
+      
+      if (startPos.table !== endPos.table) return;
+      
+      const minRow = Math.min(startPos.rowIndex, endPos.rowIndex);
+      const maxRow = Math.max(startPos.rowIndex, endPos.rowIndex);
+      const minCol = Math.min(startPos.cellIndex, endPos.cellIndex);
+      const maxCol = Math.max(startPos.cellIndex, endPos.cellIndex);
+      
+      clearCellSelection();
+      
+      const rows = Array.from(startPos.table.querySelectorAll('tr'));
+      for (let r = minRow; r <= maxRow; r++) {
+        const cells = Array.from(rows[r].querySelectorAll('td'));
+        for (let c = minCol; c <= maxCol; c++) {
+          if (cells[c]) selectCell(cells[c]);
+        }
+      }
+    }
+
+    document.addEventListener('click', function(e) {
+      const td = e.target.closest('td');
+      const table = e.target.closest('table.hwpx-table');
+      
+      if (!td || !table) {
+        if (!e.target.closest('.toolbar')) {
+          clearCellSelection();
+        }
+        return;
+      }
+      
+      if (e.target.closest('.col-resize-handle') || e.target.closest('.row-resize-handle')) {
+        return;
+      }
+      
+      if (e.shiftKey && selectionAnchor) {
+        e.preventDefault();
+        selectCellRange(selectionAnchor, td);
+      } else if (e.ctrlKey || e.metaKey) {
+        if (td.classList.contains('selected')) {
+          td.classList.remove('selected');
+          selectedCells = selectedCells.filter(c => c !== td);
+        } else {
+          selectCell(td);
+        }
+        selectionAnchor = td;
+      } else {
+        clearCellSelection();
+        selectCell(td);
+        selectionAnchor = td;
+      }
+    });
+
+    document.addEventListener('mousedown', function(e) {
+      const colHandle = e.target.closest('.col-resize-handle');
+      const rowHandle = e.target.closest('.row-resize-handle');
+      
+      if (colHandle) {
+        e.preventDefault();
+        const td = colHandle.closest('td');
+        const table = td.closest('table');
+        const tableContainer = table.closest('.table-container');
+        const colIndex = parseInt(colHandle.dataset.col);
+        const rect = td.getBoundingClientRect();
+        
+        resizeState = {
+          type: 'col',
+          table: table,
+          tableContainer: tableContainer,
+          colIndex: colIndex,
+          startX: e.clientX,
+          startWidth: td.offsetWidth,
+          td: td
+        };
+        
+        resizeGuide = document.createElement('div');
+        resizeGuide.className = 'resize-guide col';
+        resizeGuide.style.left = e.clientX + 'px';
+        resizeGuide.style.top = table.getBoundingClientRect().top + 'px';
+        resizeGuide.style.height = table.offsetHeight + 'px';
+        document.body.appendChild(resizeGuide);
+        
+        colHandle.classList.add('active');
+      }
+      
+      if (rowHandle) {
+        e.preventDefault();
+        const td = rowHandle.closest('td');
+        const tr = td.closest('tr');
+        const table = td.closest('table');
+        const tableContainer = table.closest('.table-container');
+        const rowIndex = parseInt(rowHandle.dataset.row);
+        const rect = tr.getBoundingClientRect();
+        
+        resizeState = {
+          type: 'row',
+          table: table,
+          tableContainer: tableContainer,
+          rowIndex: rowIndex,
+          startY: e.clientY,
+          startHeight: tr.offsetHeight,
+          tr: tr
+        };
+        
+        resizeGuide = document.createElement('div');
+        resizeGuide.className = 'resize-guide row';
+        resizeGuide.style.top = e.clientY + 'px';
+        resizeGuide.style.left = table.getBoundingClientRect().left + 'px';
+        resizeGuide.style.width = table.offsetWidth + 'px';
+        document.body.appendChild(resizeGuide);
+        
+        rowHandle.classList.add('active');
+      }
+    });
+
+    document.addEventListener('mousemove', function(e) {
+      if (!resizeState) return;
+      
+      if (resizeState.type === 'col') {
+        const delta = e.clientX - resizeState.startX;
+        const newWidth = Math.max(20, resizeState.startWidth + delta);
+        resizeGuide.style.left = e.clientX + 'px';
+      } else if (resizeState.type === 'row') {
+        const delta = e.clientY - resizeState.startY;
+        const newHeight = Math.max(10, resizeState.startHeight + delta);
+        resizeGuide.style.top = e.clientY + 'px';
+      }
+    });
+
+    document.addEventListener('mouseup', function(e) {
+      if (!resizeState) return;
+      
+      if (resizeGuide) {
+        resizeGuide.remove();
+        resizeGuide = null;
+      }
+      
+      document.querySelectorAll('.col-resize-handle.active, .row-resize-handle.active').forEach(el => el.classList.remove('active'));
+      
+      const tableContainer = resizeState.tableContainer;
+      const sectionIndex = parseInt(tableContainer.dataset.section);
+      const elementIndex = parseInt(tableContainer.dataset.element);
+      
+      if (resizeState.type === 'col') {
+        const delta = e.clientX - resizeState.startX;
+        const newWidth = Math.max(20, resizeState.startWidth + delta);
+        const newWidthPt = newWidth * 0.75;
+        
+        resizeState.td.style.width = newWidthPt + 'pt';
+        
+        vscode.postMessage({
+          type: 'tableColumnResize',
+          sectionIndex: sectionIndex,
+          tableIndex: elementIndex,
+          colIndex: resizeState.colIndex,
+          width: newWidthPt
+        });
+      } else if (resizeState.type === 'row') {
+        const delta = e.clientY - resizeState.startY;
+        const newHeight = Math.max(10, resizeState.startHeight + delta);
+        const newHeightPt = newHeight * 0.75;
+        
+        resizeState.tr.style.height = newHeightPt + 'pt';
+        
+        vscode.postMessage({
+          type: 'tableRowResize',
+          sectionIndex: sectionIndex,
+          tableIndex: elementIndex,
+          rowIndex: resizeState.rowIndex,
+          height: newHeightPt
+        });
+      }
+      
+      resizeState = null;
     });
 
     function escapeHtml(text) {
@@ -1858,6 +2815,396 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
     window.addEventListener('message', event => {
       const message = event.data;
       if (message.type === 'update') renderDocument(message.content);
+    });
+
+    let findMatches = [];
+    let currentMatchIndex = -1;
+
+    function openFindReplace() {
+      document.getElementById('findReplaceDialog').classList.add('visible');
+      document.getElementById('findInput').focus();
+    }
+
+    function closeFindReplace() {
+      document.getElementById('findReplaceDialog').classList.remove('visible');
+      clearHighlights();
+    }
+
+    function clearHighlights() {
+      document.querySelectorAll('.highlight-search, .highlight-current').forEach(el => {
+        const parent = el.parentNode;
+        parent.replaceChild(document.createTextNode(el.textContent), el);
+        parent.normalize();
+      });
+      findMatches = [];
+      currentMatchIndex = -1;
+      updateFindResultInfo();
+    }
+
+    function performFind() {
+      clearHighlights();
+      const query = document.getElementById('findInput').value;
+      if (!query) return;
+
+      const matchCase = document.getElementById('matchCase').checked;
+      const wholeWord = document.getElementById('wholeWord').checked;
+      
+      const docContainer = document.getElementById('document');
+      const walker = document.createTreeWalker(docContainer, NodeFilter.SHOW_TEXT, null, false);
+      
+      const bs = String.fromCharCode(92);
+      const specialChars = ['.', '*', '+', '?', '^', '$', '{', '}', '(', ')', '|', String.fromCharCode(91), String.fromCharCode(93), bs];
+      let escaped = '';
+      for (let i = 0; i < query.length; i++) {
+        const c = query[i];
+        if (specialChars.indexOf(c) >= 0) {
+          escaped += bs + c;
+        } else {
+          escaped += c;
+        }
+      }
+      const wb = bs + 'b';
+      const pattern = wholeWord ? wb + escaped + wb : escaped;
+      const regex = new RegExp(pattern, matchCase ? 'g' : 'gi');
+      
+      const textNodes = [];
+      while (walker.nextNode()) {
+        textNodes.push(walker.currentNode);
+      }
+      
+      textNodes.forEach(node => {
+        if (node.parentElement.closest('.highlight-search, .highlight-current')) return;
+        const text = node.textContent;
+        const matches = [...text.matchAll(regex)];
+        if (matches.length === 0) return;
+        
+        const fragment = document.createDocumentFragment();
+        let lastIndex = 0;
+        
+        matches.forEach(match => {
+          if (match.index > lastIndex) {
+            fragment.appendChild(document.createTextNode(text.substring(lastIndex, match.index)));
+          }
+          const span = document.createElement('span');
+          span.className = 'highlight-search';
+          span.textContent = match[0];
+          fragment.appendChild(span);
+          findMatches.push(span);
+          lastIndex = match.index + match[0].length;
+        });
+        
+        if (lastIndex < text.length) {
+          fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
+        }
+        
+        node.parentNode.replaceChild(fragment, node);
+      });
+      
+      if (findMatches.length > 0) {
+        currentMatchIndex = 0;
+        highlightCurrentMatch();
+      }
+      updateFindResultInfo();
+    }
+
+    function highlightCurrentMatch() {
+      findMatches.forEach((el, i) => {
+        el.className = i === currentMatchIndex ? 'highlight-current' : 'highlight-search';
+      });
+      if (findMatches[currentMatchIndex]) {
+        findMatches[currentMatchIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+
+    function findNext() {
+      if (findMatches.length === 0) {
+        performFind();
+        return;
+      }
+      currentMatchIndex = (currentMatchIndex + 1) % findMatches.length;
+      highlightCurrentMatch();
+      updateFindResultInfo();
+    }
+
+    function findPrev() {
+      if (findMatches.length === 0) {
+        performFind();
+        return;
+      }
+      currentMatchIndex = (currentMatchIndex - 1 + findMatches.length) % findMatches.length;
+      highlightCurrentMatch();
+      updateFindResultInfo();
+    }
+
+    function updateFindResultInfo() {
+      const infoEl = document.getElementById('findResultInfo');
+      if (findMatches.length === 0) {
+        infoEl.textContent = document.getElementById('findInput').value ? '결과 없음' : '';
+      } else {
+        infoEl.textContent = (currentMatchIndex + 1) + ' / ' + findMatches.length + ' 일치';
+      }
+    }
+
+    function replaceOne() {
+      if (currentMatchIndex < 0 || currentMatchIndex >= findMatches.length) return;
+      const replaceText = document.getElementById('replaceInput').value;
+      const currentEl = findMatches[currentMatchIndex];
+      
+      const textNode = document.createTextNode(replaceText);
+      currentEl.parentNode.replaceChild(textNode, currentEl);
+      
+      findMatches.splice(currentMatchIndex, 1);
+      if (findMatches.length > 0) {
+        currentMatchIndex = currentMatchIndex % findMatches.length;
+        highlightCurrentMatch();
+      } else {
+        currentMatchIndex = -1;
+      }
+      updateFindResultInfo();
+      
+      notifyDocumentChanged();
+    }
+
+    function replaceAll() {
+      const replaceText = document.getElementById('replaceInput').value;
+      const count = findMatches.length;
+      
+      findMatches.forEach(el => {
+        const textNode = document.createTextNode(replaceText);
+        el.parentNode.replaceChild(textNode, el);
+      });
+      
+      findMatches = [];
+      currentMatchIndex = -1;
+      updateFindResultInfo();
+      
+      if (count > 0) {
+        document.getElementById('findResultInfo').textContent = count + '개 항목이 바뀜';
+        notifyDocumentChanged();
+      }
+    }
+
+    function notifyDocumentChanged() {
+      const paras = document.querySelectorAll('.paragraph[contenteditable="true"]');
+      paras.forEach(para => {
+        const sectionIndex = parseInt(para.closest('.section').dataset.section);
+        const elementIndex = parseInt(para.dataset.element);
+        const text = para.textContent;
+        vscode.postMessage({
+          type: 'updateParagraph',
+          sectionIndex,
+          elementIndex,
+          runIndex: 0,
+          text
+        });
+      });
+    }
+
+    document.getElementById('findReplaceBtn').addEventListener('click', openFindReplace);
+    document.getElementById('closeFindReplace').addEventListener('click', closeFindReplace);
+    document.getElementById('findInput').addEventListener('input', performFind);
+    document.getElementById('findNext').addEventListener('click', findNext);
+    document.getElementById('findPrev').addEventListener('click', findPrev);
+    document.getElementById('replaceOne').addEventListener('click', replaceOne);
+    document.getElementById('replaceAll').addEventListener('click', replaceAll);
+    document.getElementById('matchCase').addEventListener('change', performFind);
+    document.getElementById('wholeWord').addEventListener('change', performFind);
+
+    document.addEventListener('keydown', function(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        openFindReplace();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'h') {
+        e.preventDefault();
+        openFindReplace();
+      }
+      if (e.key === 'Escape') {
+        closeFindReplace();
+      }
+      if (e.key === 'Enter' && document.getElementById('findReplaceDialog').classList.contains('visible')) {
+        e.preventDefault();
+        if (e.shiftKey) {
+          findPrev();
+        } else {
+          findNext();
+        }
+      }
+    });
+
+    let bookmarks = [];
+    
+    function toggleBookmark() {
+      const selection = window.getSelection();
+      if (selection.rangeCount === 0) return;
+      
+      const range = selection.getRangeAt(0);
+      const para = range.startContainer.parentElement?.closest('.paragraph, .cell-content');
+      if (!para) return;
+      
+      const section = para.closest('.section');
+      const sectionIndex = section ? parseInt(section.dataset.section) : 0;
+      const elementIndex = parseInt(para.dataset.element) || 0;
+      
+      const existingIndex = bookmarks.findIndex(b => b.sectionIndex === sectionIndex && b.elementIndex === elementIndex);
+      
+      if (existingIndex >= 0) {
+        bookmarks.splice(existingIndex, 1);
+        para.style.borderLeft = '';
+      } else {
+        bookmarks.push({ sectionIndex, elementIndex, text: para.textContent.substring(0, 30) });
+        para.style.borderLeft = '3px solid #ffc107';
+      }
+      
+      updateBookmarkUI();
+    }
+
+    function updateBookmarkUI() {
+      console.log('Bookmarks:', bookmarks);
+    }
+
+    function jumpToBookmark(index) {
+      const bm = bookmarks[index];
+      if (!bm) return;
+      
+      const section = document.querySelector('.section[data-section="' + bm.sectionIndex + '"]');
+      if (!section) return;
+      
+      const para = section.querySelector('[data-element="' + bm.elementIndex + '"]');
+      if (para) {
+        para.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        para.focus();
+      }
+    }
+
+    document.getElementById('bookmarkBtn').addEventListener('click', toggleBookmark);
+
+    function openHyperlinkDialog() {
+      const selection = window.getSelection();
+      const selectedText = selection.toString().trim();
+      document.getElementById('linkText').value = selectedText;
+      document.getElementById('linkUrl').value = '';
+      document.getElementById('hyperlinkDialog').classList.add('visible');
+      document.getElementById('linkUrl').focus();
+    }
+
+    function closeHyperlinkDialog() {
+      document.getElementById('hyperlinkDialog').classList.remove('visible');
+    }
+
+    function insertHyperlinkAction() {
+      const text = document.getElementById('linkText').value.trim();
+      const url = document.getElementById('linkUrl').value.trim();
+      if (!url) {
+        alert('URL을 입력하세요.');
+        return;
+      }
+      
+      const linkText = text || url;
+      const selection = window.getSelection();
+      if (selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        range.deleteContents();
+        const link = document.createElement('a');
+        link.href = url;
+        link.textContent = linkText;
+        link.target = '_blank';
+        range.insertNode(link);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        notifyDocumentChanged();
+      }
+      closeHyperlinkDialog();
+    }
+
+    document.getElementById('insertLink').addEventListener('click', openHyperlinkDialog);
+    document.getElementById('closeHyperlink').addEventListener('click', closeHyperlinkDialog);
+    document.getElementById('cancelHyperlink').addEventListener('click', closeHyperlinkDialog);
+    document.getElementById('insertHyperlink').addEventListener('click', insertHyperlinkAction);
+
+    document.addEventListener('click', function(e) {
+      if (e.target.tagName === 'A' && e.target.href) {
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          vscode.postMessage({ type: 'openUrl', url: e.target.href });
+        }
+      }
+    });
+
+    document.addEventListener('keydown', function(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        openHyperlinkDialog();
+      }
+      if (e.key === 'Escape' && document.getElementById('hyperlinkDialog').classList.contains('visible')) {
+        closeHyperlinkDialog();
+      }
+    });
+
+    function generateToc() {
+      const outlines = document.querySelectorAll('.paragraph[data-outline-level]');
+      if (outlines.length === 0) {
+        alert('개요 번호가 적용된 단락이 없습니다.\\n먼저 단락에 개요 수준을 적용하세요.');
+        return;
+      }
+
+      let tocHtml = '<div class="toc-container element" data-type="toc">';
+      tocHtml += '<div class="toc-title">목차</div>';
+      
+      outlines.forEach((para, index) => {
+        const level = parseInt(para.dataset.outlineLevel) || 1;
+        const text = para.textContent.trim();
+        const sectionIndex = para.dataset.section;
+        const elementIndex = para.dataset.element;
+        
+        tocHtml += '<div class="toc-entry toc-level-' + level + '" ';
+        tocHtml += 'data-target-section="' + sectionIndex + '" ';
+        tocHtml += 'data-target-element="' + elementIndex + '">';
+        tocHtml += escapeHtml(text);
+        tocHtml += '</div>';
+      });
+      
+      tocHtml += '</div>';
+      
+      const selection = window.getSelection();
+      if (selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        const para = range.startContainer.parentElement?.closest('.paragraph');
+        if (para) {
+          const tempDiv = document.createElement('div');
+          tempDiv.innerHTML = tocHtml;
+          para.parentNode.insertBefore(tempDiv.firstChild, para);
+          notifyDocumentChanged();
+          return;
+        }
+      }
+      
+      const firstSection = document.querySelector('.section');
+      if (firstSection) {
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = tocHtml;
+        firstSection.insertBefore(tempDiv.firstChild, firstSection.firstChild);
+        notifyDocumentChanged();
+      }
+    }
+
+    document.getElementById('insertToc').addEventListener('click', generateToc);
+
+    document.addEventListener('click', function(e) {
+      const tocEntry = e.target.closest('.toc-entry');
+      if (tocEntry) {
+        const sectionIndex = tocEntry.dataset.targetSection;
+        const elementIndex = tocEntry.dataset.targetElement;
+        const section = document.querySelector('.section[data-section="' + sectionIndex + '"]');
+        if (section) {
+          const para = section.querySelector('[data-element="' + elementIndex + '"]');
+          if (para) {
+            para.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            para.focus();
+          }
+        }
+      }
     });
 
     vscode.postMessage({ type: 'ready' });

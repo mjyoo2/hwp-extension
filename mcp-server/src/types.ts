@@ -631,6 +631,7 @@ export interface TextRun {
   memoId?: string;
   footnoteRef?: number;
   endnoteRef?: number;
+  pageNumber?: boolean;  // If true, this run represents a page number placeholder
 }
 
 // 5.2 Section Definition Elements

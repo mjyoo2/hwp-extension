@@ -1,13 +1,14 @@
-# HWPX Editor for VSCode
+# HWP/HWPX Editor for VSCode
 
 [![GitHub](https://img.shields.io/badge/GitHub-mjyoo2%2Fhwp--extension-blue?logo=github)](https://github.com/mjyoo2/hwp-extension)
 
-VSCode에서 한글(HWPX) 문서를 열고 편집할 수 있는 확장 프로그램입니다.
+VSCode에서 한글(HWP/HWPX) 문서를 열고 편집할 수 있는 확장 프로그램입니다.
 
 ## Features
 
 ### 문서 보기 및 편집
 - **HWPX 파일**: 읽기 및 편집 지원 (XML 기반 최신 포맷)
+- **HWP 파일**: 읽기 지원 (바이너리 레거시 포맷, 읽기 전용)
 
 ### 지원 기능
 - 텍스트 내용 보기 및 편집
@@ -58,8 +59,9 @@ Command Palette (Ctrl+Shift+P)에서:
 | 포맷 | 확장자 | 읽기 | 쓰기 |
 |------|--------|------|------|
 | HWPX | .hwpx | O | O |
+| HWP | .hwp | O | X (읽기 전용) |
 
-> **Note**: HWP (바이너리) 파일은 지원하지 않습니다. 한컴오피스에서 HWPX로 변환 후 사용해주세요.
+> **Note**: HWP 파일은 읽기 전용으로 지원됩니다. 편집이 필요한 경우 한컴오피스에서 HWPX로 변환 후 사용해주세요.
 
 ## Requirements
 
@@ -67,10 +69,15 @@ Command Palette (Ctrl+Shift+P)에서:
 
 ## Known Issues
 
-- HWP 파일 미지원 (HWPX로 변환 필요)
+- HWP 파일은 읽기 전용 (편집하려면 HWPX로 변환 필요)
 - 일부 복잡한 서식은 표시되지 않을 수 있습니다
+- 암호화된 HWP 파일은 지원하지 않습니다
 
 ## Release Notes
+
+### 0.2.0
+- HWP 파일 읽기 지원 추가 (읽기 전용)
+- OLE Compound File 파싱 구현
 
 ### 0.1.0
 - 최초 릴리스
