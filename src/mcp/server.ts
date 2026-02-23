@@ -144,24 +144,24 @@ const tools = [
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        section_index: { type: 'number', description: 'Section index' },
-        after_index: { type: 'number', description: 'Insert after this paragraph index (-1 for beginning)' },
+        section_index: { type: 'number', description: 'Section index (default 0)' },
+        after_index: { type: 'number', description: 'Insert after this paragraph index (-1 for beginning, default: append to end)' },
         text: { type: 'string', description: 'Paragraph text' },
       },
-      required: ['doc_id', 'section_index', 'after_index', 'text'],
+      required: ['doc_id', 'text'],
     },
   },
   {
     name: 'delete_paragraph',
-    description: 'Delete a paragraph (HWPX only)',
+    description: 'Delete a paragraph by element index (HWPX only). Use get_paragraphs to find the element index.',
     inputSchema: {
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        section_index: { type: 'number', description: 'Section index' },
-        paragraph_index: { type: 'number', description: 'Paragraph index to delete' },
+        section_index: { type: 'number', description: 'Section index (default 0)' },
+        paragraph_index: { type: 'number', description: 'Element index of the paragraph to delete (from get_paragraphs or insert_paragraph result)' },
       },
-      required: ['doc_id', 'section_index', 'paragraph_index'],
+      required: ['doc_id', 'paragraph_index'],
     },
   },
   {
@@ -191,6 +191,54 @@ const tools = [
         text: { type: 'string', description: 'Text to append' },
       },
       required: ['doc_id', 'section_index', 'paragraph_index', 'text'],
+    },
+  },
+
+  // === List Operations ===
+  {
+    name: 'create_bulleted_list',
+    description: 'Create a bulleted list (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        section_index: { type: 'number', description: 'Section index (default 0)' },
+        items: { type: 'array', items: { type: 'string' }, description: 'List items' },
+        after_element_index: { type: 'number', description: 'Insert after this element (default: append to end)' },
+        bullet_char: { type: 'string', description: 'Bullet character (default: •)' },
+      },
+      required: ['doc_id', 'items'],
+    },
+  },
+  {
+    name: 'create_numbered_list',
+    description: 'Create a numbered list (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        section_index: { type: 'number', description: 'Section index (default 0)' },
+        items: { type: 'array', items: { type: 'string' }, description: 'List items' },
+        after_element_index: { type: 'number', description: 'Insert after this element (default: append to end)' },
+        start_number: { type: 'number', description: 'Starting number (default: 1)' },
+        format: { type: 'string', enum: ['decimal', 'roman', 'alpha'], description: 'Numbering format (default: decimal)' },
+      },
+      required: ['doc_id', 'items'],
+    },
+  },
+  {
+    name: 'set_paragraph_numbering',
+    description: 'Set numbering/bullet type for a paragraph (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        section_index: { type: 'number', description: 'Section index' },
+        paragraph_index: { type: 'number', description: 'Paragraph index' },
+        type: { type: 'string', enum: ['none', 'bullet', 'decimal', 'roman', 'alpha'], description: 'Numbering type' },
+        level: { type: 'number', description: 'Indent level (0-9, default: 0)' },
+      },
+      required: ['doc_id', 'section_index', 'paragraph_index', 'type'],
     },
   },
 
@@ -468,6 +516,24 @@ const tools = [
     },
   },
 
+  {
+    name: 'merge_table_cells',
+    description: 'Merge a range of table cells (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        section_index: { type: 'number', description: 'Section index' },
+        table_index: { type: 'number', description: 'Table index' },
+        start_row: { type: 'number', description: 'Starting row index' },
+        start_col: { type: 'number', description: 'Starting column index' },
+        end_row: { type: 'number', description: 'Ending row index (inclusive)' },
+        end_col: { type: 'number', description: 'Ending column index (inclusive)' },
+      },
+      required: ['doc_id', 'section_index', 'table_index', 'start_row', 'start_col', 'end_row', 'end_col'],
+    },
+  },
+
   // === Page Settings ===
   {
     name: 'get_page_settings',
@@ -509,12 +575,12 @@ const tools = [
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        source_section: { type: 'number', description: 'Source section index' },
-        source_paragraph: { type: 'number', description: 'Source paragraph index' },
-        target_section: { type: 'number', description: 'Target section index' },
-        target_after: { type: 'number', description: 'Insert after this paragraph in target' },
+        source_section: { type: 'number', description: 'Source section index (default: 0)' },
+        source_paragraph: { type: 'number', description: 'Source element index (from get_paragraphs result)' },
+        target_section: { type: 'number', description: 'Target section index (default: 0)' },
+        target_after: { type: 'number', description: 'Insert after this element index in target (-1 to insert at beginning)' },
       },
-      required: ['doc_id', 'source_section', 'source_paragraph', 'target_section', 'target_after'],
+      required: ['doc_id', 'source_paragraph', 'target_after'],
     },
   },
   {
@@ -524,12 +590,12 @@ const tools = [
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        source_section: { type: 'number', description: 'Source section index' },
-        source_paragraph: { type: 'number', description: 'Source paragraph index' },
-        target_section: { type: 'number', description: 'Target section index' },
-        target_after: { type: 'number', description: 'Insert after this paragraph in target' },
+        source_section: { type: 'number', description: 'Source section index (default: 0)' },
+        source_paragraph: { type: 'number', description: 'Source element index (from get_paragraphs result)' },
+        target_section: { type: 'number', description: 'Target section index (default: 0)' },
+        target_after: { type: 'number', description: 'Insert after this element index in target (-1 to insert at beginning)' },
       },
-      required: ['doc_id', 'source_section', 'source_paragraph', 'target_section', 'target_after'],
+      required: ['doc_id', 'source_paragraph', 'target_after'],
     },
   },
 
@@ -617,13 +683,13 @@ const tools = [
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        section_index: { type: 'number', description: 'Section index' },
-        after_index: { type: 'number', description: 'Insert after this element index (-1 for beginning)' },
+        section_index: { type: 'number', description: 'Section index (default 0)' },
+        after_index: { type: 'number', description: 'Insert after this element index (-1 for beginning, default: append to end)' },
         rows: { type: 'number', description: 'Number of rows' },
         cols: { type: 'number', description: 'Number of columns' },
         width: { type: 'number', description: 'Table width (optional)' },
       },
-      required: ['doc_id', 'section_index', 'after_index', 'rows', 'cols'],
+      required: ['doc_id', 'rows', 'cols'],
     },
   },
 
@@ -777,30 +843,32 @@ const tools = [
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        section_index: { type: 'number', description: 'Section index' },
-        paragraph_index: { type: 'number', description: 'Paragraph index' },
+        section_index: { type: 'number', description: 'Section index (default 0)' },
+        paragraph_index: { type: 'number', description: 'Paragraph index (default 0)' },
         url: { type: 'string', description: 'URL for the hyperlink' },
         text: { type: 'string', description: 'Display text for the hyperlink' },
       },
-      required: ['doc_id', 'section_index', 'paragraph_index', 'url', 'text'],
+      required: ['doc_id', 'url', 'text'],
     },
   },
 
   // === Images ===
   {
     name: 'insert_image',
-    description: 'Insert an image into the document (HWPX only)',
+    description: 'Insert an image into the document (HWPX only). Provide either image_path (file path) or image_data (base64-encoded image data).',
     inputSchema: {
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        section_index: { type: 'number', description: 'Section index' },
-        after_index: { type: 'number', description: 'Insert after this element index (-1 for beginning)' },
+        section_index: { type: 'number', description: 'Section index (default 0)' },
+        after_index: { type: 'number', description: 'Insert after this element index (-1 for beginning, default: append to end)' },
         image_path: { type: 'string', description: 'Path to the image file' },
-        width: { type: 'number', description: 'Image width (optional)' },
-        height: { type: 'number', description: 'Image height (optional)' },
+        image_data: { type: 'string', description: 'Base64-encoded image data (alternative to image_path)' },
+        mime_type: { type: 'string', description: 'MIME type when using image_data (default: image/png)' },
+        width: { type: 'number', description: 'Image width in hwpunit (default: 10000)' },
+        height: { type: 'number', description: 'Image height in hwpunit (default: 10000)' },
       },
-      required: ['doc_id', 'section_index', 'after_index', 'image_path'],
+      required: ['doc_id'],
     },
   },
   {
@@ -893,6 +961,64 @@ const tools = [
     },
   },
 
+  // === TextBox ===
+  {
+    name: 'insert_textbox',
+    description: 'Insert a text box (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        section_index: { type: 'number', description: 'Section index' },
+        x: { type: 'number', description: 'X position in pt' },
+        y: { type: 'number', description: 'Y position in pt' },
+        width: { type: 'number', description: 'Width in pt' },
+        height: { type: 'number', description: 'Height in pt' },
+        text: { type: 'string', description: 'Text content' },
+        fill_color: { type: 'string', description: 'Fill color (hex, e.g., "#FFFFFF")' },
+        stroke_color: { type: 'string', description: 'Stroke color (hex)' },
+        stroke_width: { type: 'number', description: 'Stroke width in pt' },
+      },
+      required: ['doc_id', 'section_index', 'x', 'y', 'width', 'height', 'text'],
+    },
+  },
+  {
+    name: 'get_textboxes',
+    description: 'Get all text boxes in the document',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+      },
+      required: ['doc_id'],
+    },
+  },
+  {
+    name: 'update_textbox_text',
+    description: 'Update text in a text box (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        textbox_id: { type: 'string', description: 'TextBox ID' },
+        text: { type: 'string', description: 'New text content' },
+      },
+      required: ['doc_id', 'textbox_id', 'text'],
+    },
+  },
+  {
+    name: 'delete_textbox',
+    description: 'Delete a text box (HWPX only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        doc_id: { type: 'string', description: 'Document ID' },
+        textbox_id: { type: 'string', description: 'TextBox ID' },
+      },
+      required: ['doc_id', 'textbox_id'],
+    },
+  },
+
   // === Equations ===
   {
     name: 'get_equations',
@@ -939,12 +1065,13 @@ const tools = [
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        section_index: { type: 'number', description: 'Section index' },
-        paragraph_index: { type: 'number', description: 'Paragraph index' },
+        section_index: { type: 'number', description: 'Section index (default 0)' },
+        paragraph_index: { type: 'number', description: 'Paragraph index (default 0)' },
         author: { type: 'string', description: 'Memo author' },
-        content: { type: 'string', description: 'Memo content' },
+        text: { type: 'string', description: 'Memo text content' },
+        content: { type: 'string', description: 'Memo content (alias for text)' },
       },
-      required: ['doc_id', 'section_index', 'paragraph_index', 'content'],
+      required: ['doc_id'],
     },
   },
   {
@@ -1216,7 +1343,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const doc = getDoc(args?.doc_id as string);
         if (!doc) return error('Document not found');
 
-        const result = doc.getParagraph(args?.section_index as number, args?.paragraph_index as number);
+        const sectionIdx = Number(args?.section_index ?? 0);
+        const paragraphIdx = Number(args?.paragraph_index ?? 0);
+        const result = doc.getParagraph(sectionIdx, paragraphIdx);
         if (!result) return error('Paragraph not found');
         return success(result);
       }
@@ -1226,9 +1355,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
+        const sectionIdx = (args?.section_index as number) ?? 0;
+        const section = doc.content.sections[sectionIdx];
+        if (!section) return error('Section not found');
+        const afterIdx = (args?.after_index as number) ?? section.elements.length - 1;
         const index = doc.insertParagraph(
-          args?.section_index as number,
-          args?.after_index as number,
+          sectionIdx,
+          afterIdx,
           args?.text as string
         );
 
@@ -1241,7 +1374,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
-        if (doc.deleteParagraph(args?.section_index as number, args?.paragraph_index as number)) {
+        if (doc.deleteParagraph(Number(args?.section_index ?? 0), Number(args?.paragraph_index ?? 0))) {
           return success({ message: 'Paragraph deleted' });
         }
         return error('Failed to delete paragraph');
@@ -1272,6 +1405,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args?.text as string
         );
         return success({ message: 'Text appended' });
+      }
+
+      // === List Operations ===
+      case 'create_bulleted_list': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        const indices = doc.createBulletedList(
+          (args?.section_index as number) ?? 0,
+          args?.items as string[],
+          args?.after_element_index as number | undefined,
+          (args?.bullet_char as string) ?? '•'
+        );
+        return success({ inserted_indices: indices, count: indices.length });
+      }
+
+      case 'create_numbered_list': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        const indices = doc.createNumberedList(
+          (args?.section_index as number) ?? 0,
+          args?.items as string[],
+          args?.after_element_index as number | undefined,
+          (args?.start_number as number) ?? 1,
+          (args?.format as 'decimal' | 'roman' | 'alpha') ?? 'decimal'
+        );
+        return success({ inserted_indices: indices, count: indices.length });
+      }
+
+      case 'set_paragraph_numbering': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        const result = doc.setParagraphNumbering(
+          Number(args?.section_index ?? 0),
+          Number(args?.paragraph_index ?? 0),
+          args?.type as 'none' | 'bullet' | 'decimal' | 'roman' | 'alpha',
+          Number(args?.level ?? 0)
+        );
+        return success({ success: result });
       }
 
       // === Character Styling ===
@@ -1404,7 +1581,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const doc = getDoc(args?.doc_id as string);
         if (!doc) return error('Document not found');
 
-        const table = doc.getTable(args?.section_index as number, args?.table_index as number);
+        const sectionIdx = Number(args?.section_index ?? 0);
+        const tableIdx = Number(args?.table_index ?? 0);
+        const table = doc.getTable(sectionIdx, tableIdx);
         if (!table) return error('Table not found');
         return success(table);
       }
@@ -1414,10 +1593,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
 
         const cell = doc.getTableCell(
-          args?.section_index as number,
-          args?.table_index as number,
-          args?.row as number,
-          args?.col as number
+          Number(args?.section_index ?? 0),
+          Number(args?.table_index ?? 0),
+          Number(args?.row ?? 0),
+          Number(args?.col ?? 0)
         );
         if (!cell) return error('Cell not found');
         return success(cell);
@@ -1529,12 +1708,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
 
         const csv = doc.getTableAsCsv(
-          args?.section_index as number,
-          args?.table_index as number,
+          Number(args?.section_index ?? 0),
+          Number(args?.table_index ?? 0),
           args?.delimiter as string || ','
         );
         if (!csv) return error('Table not found');
         return success({ csv });
+      }
+
+      case 'merge_table_cells': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        if (doc.mergeCells(
+          args?.section_index as number,
+          args?.table_index as number,
+          args?.start_row as number,
+          args?.start_col as number,
+          args?.end_row as number,
+          args?.end_col as number
+        )) {
+          return success({ message: 'Cells merged' });
+        }
+        return error('Failed to merge cells');
       }
 
       // === Page Settings ===
@@ -1572,12 +1769,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
-        if (doc.copyParagraph(
-          args?.source_section as number,
-          args?.source_paragraph as number,
-          args?.target_section as number,
-          args?.target_after as number
-        )) {
+        const srcSection = Number(args?.source_section ?? 0);
+        const srcParagraph = Number(args?.source_paragraph ?? 0);
+        const tgtSection = Number(args?.target_section ?? 0);
+        const tgtAfter = Number(args?.target_after ?? -1);
+
+        if (doc.copyParagraph(srcSection, srcParagraph, tgtSection, tgtAfter)) {
           return success({ message: 'Paragraph copied' });
         }
         return error('Failed to copy paragraph');
@@ -1588,12 +1785,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
-        if (doc.moveParagraph(
-          args?.source_section as number,
-          args?.source_paragraph as number,
-          args?.target_section as number,
-          args?.target_after as number
-        )) {
+        const srcSection = Number(args?.source_section ?? 0);
+        const srcParagraph = Number(args?.source_paragraph ?? 0);
+        const tgtSection = Number(args?.target_section ?? 0);
+        const tgtAfter = Number(args?.target_after ?? -1);
+
+        if (doc.moveParagraph(srcSection, srcParagraph, tgtSection, tgtAfter)) {
           return success({ message: 'Paragraph moved' });
         }
         return error('Failed to move paragraph');
@@ -1687,11 +1884,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
+        const rowCount = args?.rows as number;
+        const colCount = args?.cols as number;
+        if (!rowCount || rowCount <= 0) return error('rows must be a positive number');
+        if (!colCount || colCount <= 0) return error('cols must be a positive number');
+
+        const sectionIdx = (args?.section_index as number) ?? 0;
+        const section = doc.content.sections[sectionIdx];
+        if (!section) return error('Section not found');
+        const afterIdx = (args?.after_index as number) ?? section.elements.length - 1;
+
         const result = doc.insertTable(
-          args?.section_index as number,
-          args?.after_index as number,
-          args?.rows as number,
-          args?.cols as number,
+          sectionIdx,
+          afterIdx,
+          rowCount,
+          colCount,
           { width: args?.width as number | undefined }
         );
         if (!result) return error('Failed to insert table');
@@ -1749,10 +1956,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
+        const fnText = args?.text as string;
+        if (!fnText) return error('text is required');
+
         const result = doc.insertFootnote(
-          args?.section_index as number,
-          args?.paragraph_index as number,
-          args?.text as string
+          Number(args?.section_index ?? 0),
+          Number(args?.paragraph_index ?? 0),
+          fnText
         );
         if (!result) return error('Failed to insert footnote');
         return success({ message: 'Footnote inserted', id: result.id });
@@ -1769,10 +1979,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
+        const enText = args?.text as string;
+        if (!enText) return error('text is required');
+
         const result = doc.insertEndnote(
-          args?.section_index as number,
-          args?.paragraph_index as number,
-          args?.text as string
+          Number(args?.section_index ?? 0),
+          Number(args?.paragraph_index ?? 0),
+          enText
         );
         if (!result) return error('Failed to insert endnote');
         return success({ message: 'Endnote inserted', id: result.id });
@@ -1790,10 +2003,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
+        const bookmarkName = args?.name as string;
+        if (!bookmarkName) return error('Bookmark name is required');
+
         if (doc.insertBookmark(
-          args?.section_index as number,
-          args?.paragraph_index as number,
-          args?.name as string
+          Number(args?.section_index ?? 0),
+          Number(args?.paragraph_index ?? 0),
+          bookmarkName
         )) {
           return success({ message: 'Bookmark inserted' });
         }
@@ -1811,11 +2027,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
+        const hlUrl = args?.url as string;
+        const hlText = args?.text as string;
+        if (!hlUrl) return error('url is required');
+        if (!hlText) return error('text is required');
+
         if (doc.insertHyperlink(
-          args?.section_index as number,
-          args?.paragraph_index as number,
-          args?.url as string,
-          args?.text as string
+          Number(args?.section_index ?? 0),
+          Number(args?.paragraph_index ?? 0),
+          hlUrl,
+          hlText
         )) {
           return success({ message: 'Hyperlink inserted' });
         }
@@ -1828,27 +2049,51 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
-        const imagePath = args?.image_path as string;
-        if (!fs.existsSync(imagePath)) return error('Image file not found');
+        let base64Data: string;
+        let mimeType: string;
 
-        const imageData = fs.readFileSync(imagePath);
-        const ext = path.extname(imagePath).toLowerCase();
-        const mimeTypes: Record<string, string> = {
-          '.png': 'image/png',
-          '.jpg': 'image/jpeg',
-          '.jpeg': 'image/jpeg',
-          '.gif': 'image/gif',
-          '.bmp': 'image/bmp',
-        };
+        const imagePath = args?.image_path as string | undefined;
+        const imageDataArg = args?.image_data as string | undefined;
+
+        if (imagePath) {
+          if (!fs.existsSync(imagePath)) return error('Image file not found');
+          const imageBuffer = fs.readFileSync(imagePath);
+          base64Data = imageBuffer.toString('base64');
+          const ext = path.extname(imagePath).toLowerCase();
+          const mimeTypes: Record<string, string> = {
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.bmp': 'image/bmp',
+          };
+          mimeType = mimeTypes[ext] || 'image/png';
+        } else if (imageDataArg) {
+          // Strip data URI prefix if present (e.g., "data:image/png;base64,...")
+          const dataUriMatch = imageDataArg.match(/^data:([^;]+);base64,(.+)$/s);
+          if (dataUriMatch) {
+            mimeType = (args?.mime_type as string) || dataUriMatch[1];
+            base64Data = dataUriMatch[2];
+          } else {
+            base64Data = imageDataArg;
+            mimeType = (args?.mime_type as string) || 'image/png';
+          }
+        } else {
+          return error('Either image_path or image_data is required');
+        }
+
+        const sectionIndex = (args?.section_index as number) ?? 0;
+        const section = doc.content.sections[sectionIndex];
+        const afterIndex = (args?.after_index as number) ?? (section ? section.elements.length - 1 : -1);
 
         const result = doc.insertImage(
-          args?.section_index as number,
-          args?.after_index as number,
+          sectionIndex,
+          afterIndex,
           {
-            data: imageData.toString('base64'),
-            mimeType: mimeTypes[ext] || 'image/png',
-            width: args?.width as number || 10000,
-            height: args?.height as number || 10000,
+            data: base64Data,
+            mimeType,
+            width: (args?.width as number) || 10000,
+            height: (args?.height as number) || 10000,
           }
         );
         if (!result) return error('Failed to insert image');
@@ -1860,13 +2105,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
-        // Find image ID from section and index
-        const images = doc.getImages();
-        const imageIndex = args?.image_index as number;
-        if (imageIndex < 0 || imageIndex >= images.length) return error('Image not found');
+        const sectionIdx = (args?.section_index as number) ?? 0;
+        const imgIdx = args?.image_index as number;
+        const sectionImages = doc.getImagesBySectionIndex(sectionIdx);
+        if (imgIdx < 0 || imgIdx >= sectionImages.length) return error(`Image not found at index ${imgIdx} in section ${sectionIdx}`);
 
         if (doc.updateImageSize(
-          images[imageIndex].id,
+          sectionImages[imgIdx].id,
           args?.width as number,
           args?.height as number
         )) {
@@ -1880,11 +2125,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
-        const images = doc.getImages();
-        const imageIndex = args?.image_index as number;
-        if (imageIndex < 0 || imageIndex >= images.length) return error('Image not found');
+        const delSectionIdx = (args?.section_index as number) ?? 0;
+        const delImgIdx = args?.image_index as number;
+        const delSectionImages = doc.getImagesBySectionIndex(delSectionIdx);
+        if (delImgIdx < 0 || delImgIdx >= delSectionImages.length) return error(`Image not found at index ${delImgIdx} in section ${delSectionIdx}`);
 
-        if (doc.deleteImage(images[imageIndex].id)) {
+        if (doc.deleteImage(delSectionImages[delImgIdx].id)) {
           return success({ message: 'Image deleted' });
         }
         return error('Failed to delete image');
@@ -1897,7 +2143,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
         const result = doc.insertLine(
-          args?.section_index as number,
+          Number(args?.section_index ?? args?.section ?? 0),
           args?.x1 as number,
           args?.y1 as number,
           args?.x2 as number,
@@ -1918,7 +2164,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
         const result = doc.insertRect(
-          args?.section_index as number,
+          Number(args?.section_index ?? args?.section ?? 0),
           args?.x as number,
           args?.y as number,
           args?.width as number,
@@ -1939,11 +2185,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
         const result = doc.insertEllipse(
-          args?.section_index as number,
-          args?.cx as number,
-          args?.cy as number,
-          args?.rx as number,
-          args?.ry as number,
+          Number(args?.section_index ?? args?.section ?? 0),
+          (args?.cx ?? args?.x) as number,
+          (args?.cy ?? args?.y) as number,
+          (args?.rx ?? (args?.width ? (args.width as number) / 2 : undefined)) as number,
+          (args?.ry ?? (args?.height ? (args.height as number) / 2 : undefined)) as number,
           {
             fillColor: args?.fill_color as string,
             strokeColor: args?.stroke_color as string,
@@ -1952,6 +2198,69 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
         if (!result) return error('Failed to insert ellipse');
         return success({ message: 'Ellipse inserted', id: result.id });
+      }
+
+      // === TextBox ===
+      case 'insert_textbox': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        const result = doc.insertTextBox(
+          Number(args?.section_index ?? args?.section ?? 0),
+          args?.x as number,
+          args?.y as number,
+          args?.width as number,
+          args?.height as number,
+          args?.text as string,
+          {
+            fillColor: args?.fill_color as string,
+            strokeColor: args?.stroke_color as string,
+            strokeWidth: args?.stroke_width as number,
+          }
+        );
+        if (!result) return error('Failed to insert text box');
+        return success({ message: 'Text box inserted', id: result.id });
+      }
+
+      case 'get_textboxes': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        return success({ textboxes: doc.getTextBoxes() });
+      }
+
+      case 'update_textbox_text': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        let tbIdU = args?.textbox_id as string;
+        if (!tbIdU && args?.textbox_index !== undefined) {
+          const tbs = doc.getTextBoxes();
+          const tbByIdx = tbs[Number(args.textbox_index)];
+          if (tbByIdx) tbIdU = tbByIdx.id;
+        }
+        if (tbIdU && doc.updateTextBoxText(tbIdU, args?.text as string)) {
+          return success({ message: 'Text box updated' });
+        }
+        return error('Text box not found');
+      }
+
+      case 'delete_textbox': {
+        const doc = getDoc(args?.doc_id as string);
+        if (!doc) return error('Document not found');
+        if (doc.format === 'hwp') return error('HWP files are read-only');
+
+        let tbIdD = args?.textbox_id as string;
+        if (!tbIdD && args?.textbox_index !== undefined) {
+          const tbs = doc.getTextBoxes();
+          const tbByIdx = tbs[Number(args.textbox_index)];
+          if (tbByIdx) tbIdD = tbByIdx.id;
+        }
+        if (tbIdD && doc.deleteTextBox(tbIdD)) {
+          return success({ message: 'Text box deleted' });
+        }
+        return error('Text box not found');
       }
 
       // === Equations ===
@@ -1967,9 +2276,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
         const result = doc.insertEquation(
-          args?.section_index as number,
-          args?.after_index as number,
-          args?.script as string
+          Number(args?.section_index ?? args?.section ?? 0),
+          Number(args?.after_index ?? args?.paragraph ?? 0),
+          (args?.script ?? args?.equation) as string
         );
         if (!result) return error('Failed to insert equation');
         return success({ message: 'Equation inserted', id: result.id });
@@ -1987,10 +2296,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
+        const memoContent = (args?.text ?? args?.content) as string;
+        if (!memoContent) return error('text is required');
+
         const result = doc.insertMemo(
-          args?.section_index as number,
-          args?.paragraph_index as number,
-          args?.content as string,
+          Number(args?.section_index ?? 0),
+          Number(args?.paragraph_index ?? 0),
+          memoContent,
           args?.author as string
         );
         if (!result) return error('Failed to insert memo');
@@ -2002,7 +2314,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
-        if (doc.deleteMemo(args?.memo_id as string)) {
+        let memoIdD = args?.memo_id as string;
+        if (!memoIdD && args?.memo_index !== undefined) {
+          const memos = doc.getMemos();
+          const memoByIdx = memos[Number(args.memo_index)];
+          if (memoByIdx) memoIdD = memoByIdx.id;
+        }
+        if (memoIdD && doc.deleteMemo(memoIdD)) {
           return success({ message: 'Memo deleted' });
         }
         return error('Failed to delete memo');
@@ -2029,7 +2347,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
-        if (doc.deleteSection(args?.section_index as number)) {
+        if (doc.deleteSection(Number(args?.section_index ?? args?.section ?? 0))) {
           return success({ message: 'Section deleted' });
         }
         return error('Failed to delete section');
@@ -2059,11 +2377,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
         if (doc.format === 'hwp') return error('HWP files are read-only');
 
-        if (doc.applyStyle(
-          args?.section_index as number,
-          args?.paragraph_index as number,
-          args?.style_id as number
-        )) {
+        const secIdxAS = Number(args?.section_index ?? args?.section ?? 0);
+        const paraIdxAS = Number(args?.paragraph_index ?? args?.paragraph ?? 0);
+        let styleIdAS = args?.style_id as number;
+        if (styleIdAS === undefined && args?.style_name) {
+          // Look up style by name
+          const styles = doc.getStyles();
+          if (styles?.styles) {
+            for (const [id, s] of styles.styles) {
+              if (s.name === args.style_name) { styleIdAS = id; break; }
+            }
+          }
+          if (styleIdAS === undefined) styleIdAS = 0;
+        }
+        if (doc.applyStyle(secIdxAS, paraIdxAS, styleIdAS)) {
           return success({ message: 'Style applied' });
         }
         return error('Failed to apply style');
@@ -2124,7 +2451,7 @@ function success(data: any) {
 }
 
 function error(message: string) {
-  return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
+  return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }], isError: true };
 }
 
 function escapeHtml(text: string): string {

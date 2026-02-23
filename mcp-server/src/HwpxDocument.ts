@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import { HwpxParser } from './HwpxParser';
+import { HwpParser } from './HwpParser';
 import {
   HwpxContent,
   HwpxParagraph,
@@ -50,6 +51,9 @@ export class HwpxDocument {
   private _pendingTableColumnDeletes: Array<{ tableIndex: number; colIndex: number }> = [];
   private _pendingCellMerges: Array<{ tableIndex: number; startRow: number; startCol: number; endRow: number; endCol: number }> = [];
   private _pendingHeaderFooter: Array<{ sectionIndex: number; type: 'header' | 'footer'; text: string; includePageNumber: boolean; align: 'left' | 'center' | 'right' }> = [];
+  private _pendingImageInserts: Array<{ sectionIndex: number; afterElementIndex: number; image: HwpxImage }> = [];
+  private _pendingImageDeletes: Array<{ sectionIndex: number; binaryId: string }> = [];
+  private _pendingImageSizeUpdates: Array<{ binaryId: string; width: number; height: number }> = [];
   private _hasStructuralChanges = false;
 
   private constructor(id: string, path: string, zip: JSZip | null, content: HwpxContent, format: DocumentFormat) {
@@ -64,16 +68,7 @@ export class HwpxDocument {
     const extension = path.toLowerCase();
 
     if (extension.endsWith('.hwp')) {
-      // HWP parsing would go here - for now return empty content
-      const content: HwpxContent = {
-        metadata: {},
-        sections: [],
-        images: new Map(),
-        binItems: new Map(),
-        binData: new Map(),
-        footnotes: [],
-        endnotes: [],
-      };
+      const content = HwpParser.parse(new Uint8Array(data));
       return new HwpxDocument(id, path, null, content, 'hwp');
     } else {
       const zip = await JSZip.loadAsync(data);
@@ -136,6 +131,7 @@ export class HwpxDocument {
     </hp:run>
   </hp:p>
 </hp:sec>`);
+    zip.file('Contents/content.hpf', `<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><opf:package xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core" xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head" xmlns:hpf="http://www.hancom.co.kr/schema/2011/hpf" xmlns:opf="http://www.idpf.org/2007/opf/" version="" unique-identifier="" id=""><opf:metadata><opf:title>${title || 'Untitled'}</opf:title><opf:language>ko</opf:language><opf:meta name="creator" content="text">${creator || 'Unknown'}</opf:meta><opf:meta name="CreatedDate" content="text">${now}</opf:meta><opf:meta name="ModifiedDate" content="text">${now}</opf:meta></opf:metadata><opf:manifest><opf:item id="header" href="Contents/header.xml" media-type="application/xml"/><opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="header" linear="yes"/><opf:itemref idref="section0" linear="yes"/></opf:spine></opf:package>`);
 
     return new HwpxDocument(id, 'new-document.hwpx', zip, content, 'hwpx');
   }
@@ -213,13 +209,163 @@ export class HwpxDocument {
   getAllText(): string {
     let text = '';
     for (const section of this._content.sections) {
+      // Extract header text (includes tables within headers)
+      text += this.extractHeaderFooterText(section.header);
+
       for (const element of section.elements) {
         if (element.type === 'paragraph') {
-          text += element.data.runs.map(r => r.text).join('') + '\n';
+          if (!element.data?.runs) continue;
+          text += element.data.runs.map(r => r.text || '').join('') + '\n';
+        } else if (element.type === 'table') {
+          text += this.extractTableText(element.data) + '\n';
+        } else if (element.type === 'image') {
+          const captionText = this.extractCaptionText(element.data?.caption);
+          if (captionText) {
+            text += captionText + '\n';
+          }
+        } else if (element.type === 'container') {
+          const captionText = this.extractCaptionText(element.data?.caption);
+          if (captionText) {
+            text += captionText + '\n';
+          }
+        } else if (element.type === 'textbox') {
+          const tbText = this.extractParagraphsText(element.data?.paragraphs);
+          if (tbText) {
+            text += tbText + '\n';
+          }
+        } else if (element.type === 'rect' || element.type === 'ellipse' || element.type === 'arc' ||
+                   element.type === 'polygon' || element.type === 'curve' || element.type === 'connectline') {
+          const drawText = this.extractDrawTextParagraphs(element.data);
+          if (drawText) {
+            text += drawText + '\n';
+          }
         }
+      }
+
+      // Extract footer text (includes tables within footers)
+      text += this.extractHeaderFooterText(section.footer);
+    }
+    return text;
+  }
+
+  private extractHeaderFooterText(hf?: import('./types').HeaderFooter): string {
+    if (!hf) return '';
+    let text = '';
+    if (hf.elements && hf.elements.length > 0) {
+      for (const element of hf.elements) {
+        if (element.type === 'paragraph') {
+          if (!element.data?.runs) continue;
+          const paraText = element.data.runs.map(r => r.text || '').join('');
+          if (paraText.trim()) text += paraText + '\n';
+        } else if (element.type === 'table') {
+          const tableText = this.extractTableText(element.data);
+          if (tableText.trim()) text += tableText + '\n';
+        }
+      }
+    } else if (hf.paragraphs) {
+      for (const para of hf.paragraphs) {
+        if (!para?.runs) continue;
+        const paraText = para.runs.map(r => r.text || '').join('');
+        if (paraText.trim()) text += paraText + '\n';
       }
     }
     return text;
+  }
+
+  private extractTableText(table: import('./types').HwpxTable): string {
+    if (!table?.rows) return '';
+    const lines: string[] = [];
+
+    // Include caption text
+    const captionText = this.extractCaptionText(table.caption);
+    if (captionText) {
+      lines.push(captionText);
+    }
+
+    for (const row of table.rows) {
+      if (!row?.cells) continue;
+      const cellTexts: string[] = [];
+      for (const cell of row.cells) {
+        const cellText = this.extractCellText(cell);
+        if (cellText) {
+          cellTexts.push(cellText);
+        }
+      }
+      if (cellTexts.length > 0) {
+        lines.push(cellTexts.join('\t'));
+      }
+    }
+    return lines.join('\n');
+  }
+
+  private extractCellText(cell: import('./types').TableCell): string {
+    if (!cell) return '';
+    const parts: string[] = [];
+    // When elements array exists, use it (contains paragraphs, nested tables, and images in order)
+    if (cell.elements && cell.elements.length > 0) {
+      for (const el of cell.elements) {
+        if (el.type === 'paragraph') {
+          if (!el.data?.runs) continue;
+          const paraText = el.data.runs.map(r => r.text || '').join('');
+          if (paraText) {
+            parts.push(paraText);
+          }
+        } else if (el.type === 'table') {
+          const nestedText = this.extractTableText(el.data);
+          if (nestedText) {
+            parts.push(nestedText);
+          }
+        } else if (el.type === 'image') {
+          const captionText = this.extractCaptionText(el.data?.caption);
+          if (captionText) {
+            parts.push(captionText);
+          }
+        }
+      }
+    } else {
+      // Fallback: use paragraphs + nestedTables separately
+      if (cell.paragraphs) {
+        for (const para of cell.paragraphs) {
+          if (!para?.runs) continue;
+          const paraText = para.runs.map(r => r.text || '').join('');
+          if (paraText) {
+            parts.push(paraText);
+          }
+        }
+      }
+      if (cell.nestedTables) {
+        for (const nestedTable of cell.nestedTables) {
+          const nestedText = this.extractTableText(nestedTable);
+          if (nestedText) {
+            parts.push(nestedText);
+          }
+        }
+      }
+    }
+    return parts.join('\n');
+  }
+
+  private extractCaptionText(caption?: import('./types').Caption): string {
+    if (!caption?.paragraphs) return '';
+    return this.extractParagraphsText(caption.paragraphs);
+  }
+
+  private extractParagraphsText(paragraphs?: import('./types').HwpxParagraph[]): string {
+    if (!paragraphs) return '';
+    const parts: string[] = [];
+    for (const para of paragraphs) {
+      if (!para?.runs) continue;
+      const paraText = para.runs.map(r => r.text || '').join('');
+      if (paraText) {
+        parts.push(paraText);
+      }
+    }
+    return parts.join('\n');
+  }
+
+  private extractDrawTextParagraphs(data: any): string {
+    if (!data?.drawingObject?.drawText?.paragraphs) return '';
+    return this.extractParagraphsText(data.drawingObject.drawText.paragraphs);
   }
 
   getStructure(): object {
@@ -242,11 +388,15 @@ export class HwpxDocument {
   // ============================================================
 
   private findParagraphByPath(sectionIndex: number, elementIndex: number): HwpxParagraph | null {
-    const section = this._content.sections[sectionIndex];
+    const si = Number(sectionIndex);
+    const ei = Number(elementIndex);
+    if (isNaN(si) || isNaN(ei)) return null;
+    const section = this._content.sections[si];
     if (!section) return null;
-    const element = section.elements[elementIndex];
-    if (!element || element.type !== 'paragraph') return null;
-    return element.data;
+    if (ei < 0 || ei >= section.elements.length) return null;
+    const el = section.elements[ei];
+    if (el.type !== 'paragraph') return null;
+    return el.data;
   }
 
   getParagraphs(sectionIndex?: number): Array<{ section: number; index: number; text: string; style?: ParagraphStyle }> {
@@ -257,16 +407,19 @@ export class HwpxDocument {
 
     for (const { section, idx } of sections) {
       if (!section) continue;
-      section.elements.forEach((el, ei) => {
+      for (let elementIndex = 0; elementIndex < section.elements.length; elementIndex++) {
+        const el = section.elements[elementIndex];
         if (el.type === 'paragraph') {
-          paragraphs.push({
-            section: idx,
-            index: ei,
-            text: el.data.runs.map(r => r.text).join(''),
-            style: el.data.paraStyle,
-          });
+          if (el.data?.runs) {
+            paragraphs.push({
+              section: idx,
+              index: elementIndex,
+              text: el.data.runs.map(r => r.text || '').join(''),
+              style: el.data.paraStyle,
+            });
+          }
         }
-      });
+      }
     }
     return paragraphs;
   }
@@ -274,9 +427,10 @@ export class HwpxDocument {
   getParagraph(sectionIndex: number, paragraphIndex: number): { text: string; runs: TextRun[]; style?: ParagraphStyle } | null {
     const para = this.findParagraphByPath(sectionIndex, paragraphIndex);
     if (!para) return null;
+    const runs = para.runs || [];
     return {
-      text: para.runs.map(r => r.text).join(''),
-      runs: para.runs,
+      text: runs.map(r => r.text || '').join(''),
+      runs,
       style: para.paraStyle,
     };
   }
@@ -323,7 +477,10 @@ export class HwpxDocument {
 
   deleteParagraph(sectionIndex: number, elementIndex: number): boolean {
     const section = this._content.sections[sectionIndex];
-    if (!section || elementIndex < 0 || elementIndex >= section.elements.length) return false;
+    if (!section) return false;
+
+    if (elementIndex < 0 || elementIndex >= section.elements.length) return false;
+    if (section.elements[elementIndex].type !== 'paragraph') return false;
 
     this.saveState();
     section.elements.splice(elementIndex, 1);
@@ -491,22 +648,27 @@ export class HwpxDocument {
   // ============================================================
 
   private findTable(sectionIndex: number, tableIndex: number): HwpxTable | null {
-    const section = this._content.sections[sectionIndex];
+    const si = Number(sectionIndex ?? 0);
+    const ti = Number(tableIndex ?? 0);
+    if (isNaN(si) || isNaN(ti)) return null;
+    const section = this._content.sections[si];
     if (!section) return null;
     const tables = section.elements.filter(el => el.type === 'table');
-    return tables[tableIndex]?.data as HwpxTable || null;
+    const el = tables[ti];
+    if (!el) return null;
+    return (el.data as HwpxTable) ?? null;
   }
 
-  getTables(): Array<{ section: number; index: number; rows: number; cols: number }> {
-    const tables: Array<{ section: number; index: number; rows: number; cols: number }> = [];
+  getTables(): Array<{ section_index: number; table_index: number; rows: number; cols: number }> {
+    const tables: Array<{ section_index: number; table_index: number; rows: number; cols: number }> = [];
     this._content.sections.forEach((section, si) => {
       let tableIndex = 0;
       section.elements.forEach(el => {
         if (el.type === 'table') {
           const table = el.data as HwpxTable;
           tables.push({
-            section: si,
-            index: tableIndex++,
+            section_index: si,
+            table_index: tableIndex++,
             rows: table.rows.length,
             cols: table.rows[0]?.cells.length || 0,
           });
@@ -524,7 +686,7 @@ export class HwpxDocument {
       rows: table.rows.length,
       cols: table.rows[0]?.cells.length || 0,
       data: table.rows.map(row => row.cells.map(cell => ({
-        text: cell.paragraphs.map(p => p.runs.map(r => r.text).join('')).join('\n'),
+        text: this.extractCellText(cell),
         style: cell,
       }))),
     };
@@ -536,7 +698,7 @@ export class HwpxDocument {
     const cell = table.rows[row]?.cells[col];
     if (!cell) return null;
     return {
-      text: cell.paragraphs.map(p => p.runs.map(r => r.text).join('')).join('\n'),
+      text: this.extractCellText(cell),
       cell,
     };
   }
@@ -693,7 +855,7 @@ export class HwpxDocument {
 
     return table.rows.map(row =>
       row.cells.map(cell => {
-        const text = cell.paragraphs.map(p => p.runs.map(r => r.text).join('')).join(' ');
+        const text = (cell.paragraphs || []).map(p => (p.runs || []).map(r => r.text || '').join('')).join(' ');
         if (text.includes(delimiter) || text.includes('"') || text.includes('\n')) {
           return `"${text.replace(/"/g, '""')}"`;
         }
@@ -719,10 +881,13 @@ export class HwpxDocument {
 
     const results: Array<{ section: number; element: number; text: string; matches: string[]; count: number }> = [];
 
+    if (!this._content?.sections) return results;
     this._content.sections.forEach((section, si) => {
+      if (!section?.elements) return;
       section.elements.forEach((el, ei) => {
         if (el.type === 'paragraph') {
-          const text = el.data.runs.map(r => r.text).join('');
+          if (!el.data?.runs) return;
+          const text = el.data.runs.map(r => r?.text || '').join('');
           const found = text.match(pattern);
           if (found) {
             results.push({
@@ -734,6 +899,31 @@ export class HwpxDocument {
             });
           }
         }
+        // Also search table cells
+        if (el.type === 'table') {
+          const table = el.data as HwpxTable;
+          if (!table?.rows) return;
+          for (const row of table.rows) {
+            if (!row?.cells) continue;
+            for (const cell of row.cells) {
+              if (!cell?.paragraphs) continue;
+              for (const para of cell.paragraphs) {
+                if (!para?.runs) continue;
+                const text = para.runs.map(r => r?.text || '').join('');
+                const found = text.match(pattern);
+                if (found) {
+                  results.push({
+                    section: si,
+                    element: ei,
+                    text,
+                    matches: found,
+                    count: found.length,
+                  });
+                }
+              }
+            }
+          }
+        }
       });
     });
 
@@ -741,6 +931,8 @@ export class HwpxDocument {
   }
 
   replaceText(oldText: string, newText: string, options: { caseSensitive?: boolean; regex?: boolean; replaceAll?: boolean } = {}): number {
+    if (!oldText) return 0;
+    if (newText == null) newText = '';
     const { caseSensitive = false, regex = false, replaceAll = true } = options;
     let pattern: RegExp;
 
@@ -755,10 +947,14 @@ export class HwpxDocument {
     let count = 0;
 
     // Update in-memory content
+    if (!this._content?.sections) return count;
     for (const section of this._content.sections) {
+      if (!section?.elements) continue;
       for (const element of section.elements) {
         if (element.type === 'paragraph') {
+          if (!element.data?.runs) continue;
           for (const run of element.data.runs) {
+            if (!run || typeof run.text !== 'string') continue;
             const matches = run.text.match(pattern);
             if (matches) {
               count += matches.length;
@@ -769,14 +965,24 @@ export class HwpxDocument {
         // Also handle table cells
         if (element.type === 'table') {
           const table = element.data as HwpxTable;
+          if (!table?.rows) continue;
           for (const row of table.rows) {
+            if (!row?.cells) continue;
             for (const cell of row.cells) {
-              for (const para of cell.paragraphs) {
-                for (const run of para.runs) {
-                  const matches = run.text.match(pattern);
-                  if (matches) {
-                    count += matches.length;
-                    run.text = run.text.replace(pattern, newText);
+              count += this.replaceInParagraphs(cell.paragraphs, pattern, newText);
+              // Handle nested elements within cells
+              if (cell.elements) {
+                for (const cellEl of cell.elements) {
+                  if (cellEl.type === 'paragraph') {
+                    if (!cellEl.data?.runs) continue;
+                    for (const run of cellEl.data.runs) {
+                      if (!run || typeof run.text !== 'string') continue;
+                      const matches = run.text.match(pattern);
+                      if (matches) {
+                        count += matches.length;
+                        run.text = run.text.replace(pattern, newText);
+                      }
+                    }
                   }
                 }
               }
@@ -793,6 +999,27 @@ export class HwpxDocument {
       this._isDirty = true;
     }
 
+    return count;
+  }
+
+  private replaceInParagraphs(
+    paragraphs: HwpxParagraph[] | undefined,
+    pattern: RegExp,
+    newText: string,
+  ): number {
+    if (!paragraphs) return 0;
+    let count = 0;
+    for (const para of paragraphs) {
+      if (!para?.runs) continue;
+      for (const run of para.runs) {
+        if (!run || typeof run.text !== 'string') continue;
+        const matches = run.text.match(pattern);
+        if (matches) {
+          count += matches.length;
+          run.text = run.text.replace(pattern, newText);
+        }
+      }
+    }
     return count;
   }
 
@@ -843,7 +1070,8 @@ export class HwpxDocument {
       for (const element of section.elements) {
         if (element.type === 'paragraph') {
           paragraphs++;
-          const text = element.data.runs.map(r => r.text).join('');
+          if (!element.data?.runs) continue;
+          const text = element.data.runs.map(r => r.text || '').join('');
           characters += text.length;
           charactersNoSpaces += text.replace(/\s/g, '').length;
           words += text.trim().split(/\s+/).filter(w => w.length > 0).length;
@@ -859,33 +1087,57 @@ export class HwpxDocument {
   // ============================================================
 
   copyParagraph(sourceSection: number, sourceParagraph: number, targetSection: number, targetAfter: number): boolean {
+    if (isNaN(sourceSection) || isNaN(sourceParagraph) || isNaN(targetSection) || isNaN(targetAfter)) return false;
+
     const srcSection = this._content.sections[sourceSection];
     const tgtSection = this._content.sections[targetSection];
     if (!srcSection || !tgtSection) return false;
 
+    if (sourceParagraph < 0 || sourceParagraph >= srcSection.elements.length) return false;
     const srcElement = srcSection.elements[sourceParagraph];
     if (!srcElement || srcElement.type !== 'paragraph') return false;
+
+    // Clamp target_after to valid range (-1 means insert at beginning)
+    if (targetAfter < -1) targetAfter = -1;
+    if (targetAfter >= tgtSection.elements.length) targetAfter = tgtSection.elements.length - 1;
 
     this.saveState();
     const copy = JSON.parse(JSON.stringify(srcElement));
     copy.data.id = Math.random().toString(36).substring(2, 11);
     tgtSection.elements.splice(targetAfter + 1, 0, copy);
     this._isDirty = true;
+    this._hasStructuralChanges = true;
     return true;
   }
 
   moveParagraph(sourceSection: number, sourceParagraph: number, targetSection: number, targetAfter: number): boolean {
+    if (isNaN(sourceSection) || isNaN(sourceParagraph) || isNaN(targetSection) || isNaN(targetAfter)) return false;
+
     const srcSection = this._content.sections[sourceSection];
     const tgtSection = this._content.sections[targetSection];
     if (!srcSection || !tgtSection) return false;
 
+    if (sourceParagraph < 0 || sourceParagraph >= srcSection.elements.length) return false;
     const srcElement = srcSection.elements[sourceParagraph];
     if (!srcElement || srcElement.type !== 'paragraph') return false;
 
+    // Clamp target_after to valid range (-1 means insert at beginning)
+    if (targetAfter < -1) targetAfter = -1;
+    if (targetAfter >= tgtSection.elements.length) targetAfter = tgtSection.elements.length - 1;
+
     this.saveState();
     srcSection.elements.splice(sourceParagraph, 1);
-    tgtSection.elements.splice(targetAfter + 1, 0, srcElement);
+
+    // Adjust target index when moving within the same section
+    // and the source was before the target position
+    let insertAt = targetAfter + 1;
+    if (sourceSection === targetSection && sourceParagraph < insertAt) {
+      insertAt--;
+    }
+
+    tgtSection.elements.splice(insertAt, 0, srcElement);
     this._isDirty = true;
+    this._hasStructuralChanges = true;
     return true;
   }
 
@@ -908,7 +1160,11 @@ export class HwpxDocument {
   insertTable(sectionIndex: number, afterElementIndex: number, rows: number, cols: number, options?: { width?: number; cellWidth?: number }): { tableIndex: number } | null {
     const section = this._content.sections[sectionIndex];
     if (!section) return null;
+    if (!section.elements) section.elements = [];
     if (rows <= 0 || cols <= 0) return null;
+
+    // Clamp afterElementIndex to valid range
+    const insertAfter = Math.min(afterElementIndex, section.elements.length - 1);
 
     this.saveState();
 
@@ -943,14 +1199,14 @@ export class HwpxDocument {
       width: defaultWidth,
     };
 
+    const insertIndex = insertAfter + 1;
     const newElement: SectionElement = { type: 'table', data: newTable };
-    section.elements.splice(afterElementIndex + 1, 0, newElement);
+    section.elements.splice(insertIndex, 0, newElement);
 
     // Calculate table index
     let tableIndex = 0;
-    for (let i = 0; i <= afterElementIndex + 1; i++) {
+    for (let i = 0; i < insertIndex; i++) {
       if (section.elements[i]?.type === 'table') {
-        if (i === afterElementIndex + 1) break;
         tableIndex++;
       }
     }
@@ -968,10 +1224,10 @@ export class HwpxDocument {
     const section = this._content.sections[sectionIndex];
     if (!section || !section.header) return null;
     return {
-      paragraphs: section.header.paragraphs.map(p => ({
+      paragraphs: (section.header.paragraphs || []).map(p => ({
         id: p.id,
-        text: p.runs.map(r => r.text).join(''),
-        runs: p.runs,
+        text: (p.runs || []).map(r => r.text || '').join(''),
+        runs: p.runs || [],
       })),
     };
   }
@@ -1005,10 +1261,10 @@ export class HwpxDocument {
     const section = this._content.sections[sectionIndex];
     if (!section || !section.footer) return null;
     return {
-      paragraphs: section.footer.paragraphs.map(p => ({
+      paragraphs: (section.footer.paragraphs || []).map(p => ({
         id: p.id,
-        text: p.runs.map(r => r.text).join(''),
-        runs: p.runs,
+        text: (p.runs || []).map(r => r.text || '').join(''),
+        runs: p.runs || [],
       })),
     };
   }
@@ -1079,12 +1335,16 @@ export class HwpxDocument {
     this._content.footnotes.push(footnote);
 
     // Add footnote reference to the paragraph
+    if (!paragraph.runs) {
+      paragraph.runs = [];
+    }
     paragraph.runs.push({
       text: '',
       footnoteRef: footnoteNumber,
     });
 
     this._isDirty = true;
+    this._hasStructuralChanges = true;
     return { id: footnoteId };
   }
 
@@ -1116,12 +1376,16 @@ export class HwpxDocument {
     this._content.endnotes.push(endnote);
 
     // Add endnote reference to the paragraph
+    if (!paragraph.runs) {
+      paragraph.runs = [];
+    }
     paragraph.runs.push({
       text: '',
       endnoteRef: endnoteNumber,
     });
 
     this._isDirty = true;
+    this._hasStructuralChanges = true;
     return { id: endnoteId };
   }
 
@@ -1138,7 +1402,7 @@ export class HwpxDocument {
           for (const run of el.data.runs) {
             if (run.field?.fieldType === 'Bookmark' || run.field?.fieldType === 'bookmark') {
               bookmarks.push({
-                name: run.field.name || '',
+                name: run.field.name || (run.field as any).bookmarkName || '',
                 section: si,
                 paragraph: ei,
               });
@@ -1152,11 +1416,13 @@ export class HwpxDocument {
   }
 
   insertBookmark(sectionIndex: number, paragraphIndex: number, name: string): boolean {
+    if (!name) return false;
     const paragraph = this.findParagraphByPath(sectionIndex, paragraphIndex);
     if (!paragraph) return false;
 
     this.saveState();
 
+    if (!paragraph.runs) paragraph.runs = [];
     paragraph.runs.push({
       text: '',
       field: {
@@ -1166,6 +1432,7 @@ export class HwpxDocument {
     });
 
     this._isDirty = true;
+    this._hasStructuralChanges = true;
     return true;
   }
 
@@ -1198,6 +1465,7 @@ export class HwpxDocument {
 
     this.saveState();
 
+    if (!paragraph.runs) paragraph.runs = [];
     paragraph.runs.push({
       text,
       hyperlink: {
@@ -1208,6 +1476,7 @@ export class HwpxDocument {
     });
 
     this._isDirty = true;
+    this._hasStructuralChanges = true;
     return true;
   }
 
@@ -1215,22 +1484,91 @@ export class HwpxDocument {
   // Image Operations
   // ============================================================
 
+  getImagesBySectionIndex(sectionIndex: number): Array<{ id: string; width: number; height: number; binaryId: string }> {
+    const section = this._content.sections[sectionIndex];
+    if (!section) return [];
+    const results: Array<{ id: string; width: number; height: number; binaryId: string }> = [];
+    for (const el of section.elements) {
+      if (el.type === 'image') {
+        const img = el.data as HwpxImage;
+        results.push({ id: img.id, width: img.width, height: img.height, binaryId: img.binaryId });
+      }
+    }
+    return results;
+  }
+
+  private _nextInstId: number = Math.floor(Math.random() * 1000000000) + 1000000000;
+
+  private generateNumericId(): string {
+    return String(this._nextInstId++);
+  }
+
   insertImage(sectionIndex: number, afterElementIndex: number, imageData: { data: string; mimeType: string; width: number; height: number }): { id: string } | null {
     const section = this._content.sections[sectionIndex];
     if (!section) return null;
+    if (!section.elements) section.elements = [];
 
     this.saveState();
 
-    const imageId = Math.random().toString(36).substring(2, 11);
-    const binaryId = Math.random().toString(36).substring(2, 11);
+    // Strip data URI prefix if present (e.g., "data:image/png;base64,...")
+    let rawBase64 = imageData.data;
+    let detectedMimeType = imageData.mimeType;
+    const dataUriMatch = rawBase64.match(/^data:([^;]+);base64,(.+)$/s);
+    if (dataUriMatch) {
+      detectedMimeType = detectedMimeType || dataUriMatch[1];
+      rawBase64 = dataUriMatch[2];
+    }
+
+    const imageId = this.generateNumericId();
+    const instId = this.generateNumericId();
+    const binaryId = `image${Date.now()}`;
+
+    // Determine file extension from mime type
+    const extMap: Record<string, string> = {
+      'image/png': 'png',
+      'image/jpeg': 'jpg',
+      'image/gif': 'gif',
+      'image/bmp': 'bmp',
+    };
+    const ext = extMap[detectedMimeType] || 'png';
+
+    // Internal dimensions are stored at 1/100 of hwpunit XML values
+    // (parser divides XML values by 100, generator multiplies back by 100)
+    const internalWidth = imageData.width / 100;
+    const internalHeight = imageData.height / 100;
 
     const newImage: HwpxImage = {
       id: imageId,
       binaryId,
-      width: imageData.width,
-      height: imageData.height,
-      data: imageData.data,
-      mimeType: imageData.mimeType,
+      width: internalWidth,
+      height: internalHeight,
+      orgWidth: internalWidth,
+      orgHeight: internalHeight,
+      data: rawBase64,
+      mimeType: detectedMimeType,
+      position: {
+        treatAsChar: true,
+        affectLSpacing: false,
+        flowWithText: true,
+        allowOverlap: false,
+        holdAnchorAndSO: false,
+        vertRelTo: 'para',
+        horzRelTo: 'para',
+        vertAlign: 'top',
+        horzAlign: 'left',
+        vertOffset: 0,
+        horzOffset: 0,
+      },
+      shapeComponent: {
+        instId: instId,
+        oriWidth: internalWidth,
+        oriHeight: internalHeight,
+        curWidth: internalWidth,
+        curHeight: internalHeight,
+        horzFlip: false,
+        vertFlip: false,
+        groupLevel: 0,
+      },
     };
 
     // Store image in the images map
@@ -1240,50 +1578,122 @@ export class HwpxDocument {
     this._content.binData.set(binaryId, {
       id: binaryId,
       encoding: 'Base64',
-      data: imageData.data,
+      data: rawBase64,
     });
 
+    // Register in binItems map for content.hpf sync
+    this._content.binItems.set(binaryId, {
+      type: 'Embedding',
+      rPath: `BinData/${binaryId}.${ext}`,
+      format: ext as 'jpg' | 'bmp' | 'gif' | 'png',
+    });
+
+    // Write the binary file into the ZIP BinData folder
+    if (this._zip) {
+      const binaryBuffer = Buffer.from(rawBase64, 'base64');
+      this._zip.file(`BinData/${binaryId}.${ext}`, binaryBuffer);
+    }
+
     // Add image element to section
+    const insertAfter = Math.min(afterElementIndex, section.elements.length - 1);
     const newElement: SectionElement = { type: 'image', data: newImage };
-    section.elements.splice(afterElementIndex + 1, 0, newElement);
+    section.elements.splice(insertAfter + 1, 0, newElement);
+
+    // Queue pending image insert for XML injection (preserves existing XML)
+    this._pendingImageInserts.push({ sectionIndex, afterElementIndex: insertAfter, image: newImage });
 
     this._isDirty = true;
     return { id: imageId };
   }
 
   updateImageSize(imageId: string, width: number, height: number): boolean {
+    // Internal dimensions are stored at 1/100 of hwpunit XML values
+    const internalWidth = width / 100;
+    const internalHeight = height / 100;
+
+    // Find the image in section elements (authoritative source)
+    let found = false;
+    let binaryId: string | undefined;
+    for (const section of this._content.sections) {
+      for (const el of section.elements) {
+        if (el.type === 'image' && (el.data as HwpxImage).id === imageId) {
+          this.saveState();
+          const img = el.data as HwpxImage;
+          img.width = internalWidth;
+          img.height = internalHeight;
+          binaryId = img.binaryId;
+          found = true;
+          break;
+        }
+      }
+      if (found) break;
+    }
+    if (!found) return false;
+
+    // Also update in the images map if present
     const image = this._content.images.get(imageId);
-    if (!image) return false;
+    if (image) {
+      image.width = internalWidth;
+      image.height = internalHeight;
+    }
 
-    this.saveState();
-
-    image.width = width;
-    image.height = height;
+    // Queue pending size update for XML patching
+    if (binaryId) {
+      this._pendingImageSizeUpdates.push({ binaryId, width, height });
+    }
 
     this._isDirty = true;
     return true;
   }
 
   deleteImage(imageId: string): boolean {
-    const image = this._content.images.get(imageId);
-    if (!image) return false;
-
     this.saveState();
 
-    // Remove from images map
-    this._content.images.delete(imageId);
-
-    // Remove binary data if exists
-    if (image.binaryId) {
-      this._content.binData.delete(image.binaryId);
+    // Remove from sections
+    let removed = false;
+    let binaryId: string | undefined;
+    let sectionIndex = -1;
+    for (let si = 0; si < this._content.sections.length; si++) {
+      const section = this._content.sections[si];
+      const index = section.elements.findIndex(el => el.type === 'image' && (el.data as HwpxImage).id === imageId);
+      if (index !== -1) {
+        binaryId = (section.elements[index].data as HwpxImage).binaryId;
+        sectionIndex = si;
+        section.elements.splice(index, 1);
+        removed = true;
+        break;
+      }
     }
 
-    // Remove from sections
-    for (const section of this._content.sections) {
-      const index = section.elements.findIndex(el => el.type === 'image' && el.data.id === imageId);
-      if (index !== -1) {
-        section.elements.splice(index, 1);
-        break;
+    if (!removed) return false;
+
+    // Remove from images map
+    const image = this._content.images.get(imageId);
+    if (image) {
+      binaryId = binaryId || image.binaryId;
+      this._content.images.delete(imageId);
+    }
+
+    // Remove binary data and binItems entry
+    if (binaryId) {
+      this._content.binData.delete(binaryId);
+      this._content.binItems.delete(binaryId);
+      // Remove binary file from ZIP
+      if (this._zip) {
+        const binFiles = Object.keys(this._zip.files).filter(f => f.startsWith(`BinData/${binaryId}`));
+        for (const f of binFiles) {
+          this._zip.remove(f);
+        }
+      }
+      // Cancel any pending insert for this image (insert then delete in same save)
+      const pendingIdx = this._pendingImageInserts.findIndex(
+        ins => ins.image.binaryId === binaryId
+      );
+      if (pendingIdx !== -1) {
+        this._pendingImageInserts.splice(pendingIdx, 1);
+      } else {
+        // Queue pending image delete for XML patching (only if not a pending insert)
+        this._pendingImageDeletes.push({ sectionIndex, binaryId });
       }
     }
 
@@ -1414,7 +1824,7 @@ export class HwpxDocument {
             y: tb.y,
             width: tb.width,
             height: tb.height,
-            text: tb.paragraphs.map(p => p.runs.map(r => r.text).join('')).join('\n'),
+            text: (tb.paragraphs || []).map(p => (p.runs || []).map(r => r.text || '').join('')).join('\n'),
           });
         }
       }
@@ -1544,13 +1954,17 @@ export class HwpxDocument {
     }
     section.memos.push(memo);
 
-    // Mark the paragraph as having a memo
-    if (paragraph.runs.length > 0) {
-      paragraph.runs[paragraph.runs.length - 1].hasMemo = true;
-      paragraph.runs[paragraph.runs.length - 1].memoId = memoId;
+    // Ensure paragraph has at least one run to attach the memo to
+    if (!paragraph.runs || paragraph.runs.length === 0) {
+      paragraph.runs = [{ text: '' }];
     }
 
+    // Mark the paragraph as having a memo
+    paragraph.runs[paragraph.runs.length - 1].hasMemo = true;
+    paragraph.runs[paragraph.runs.length - 1].memoId = memoId;
+
     this._isDirty = true;
+    this._hasStructuralChanges = true;
     return { id: memoId };
   }
 
@@ -1574,7 +1988,7 @@ export class HwpxDocument {
       for (const section of this._content.sections) {
         for (const element of section.elements) {
           if (element.type === 'paragraph') {
-            for (const run of element.data.runs) {
+            for (const run of (element.data.runs || [])) {
               if (run.memoId === memoId) {
                 run.hasMemo = false;
                 run.memoId = undefined;
@@ -1585,6 +1999,7 @@ export class HwpxDocument {
       }
 
       this._isDirty = true;
+      this._hasStructuralChanges = true;
     }
 
     return found;
@@ -1776,15 +2191,27 @@ export class HwpxDocument {
     const hasTableColumnDeletes = this._pendingTableColumnDeletes && this._pendingTableColumnDeletes.length > 0;
     const hasCellMerges = this._pendingCellMerges && this._pendingCellMerges.length > 0;
     const hasHeaderFooter = this._pendingHeaderFooter && this._pendingHeaderFooter.length > 0;
+    const hasImageInserts = this._pendingImageInserts && this._pendingImageInserts.length > 0;
+    const hasImageDeletes = this._pendingImageDeletes && this._pendingImageDeletes.length > 0;
+    const hasImageSizeUpdates = this._pendingImageSizeUpdates && this._pendingImageSizeUpdates.length > 0;
     const hasTableStructuralChanges = hasTableRowInserts || hasTableRowDeletes || hasTableColumnInserts || hasTableColumnDeletes || hasCellMerges;
-    
-    const hasOnlyTextChanges = (hasTextReplacements || hasDirectTextUpdates) && 
-                               !this._hasStructuralChanges && 
-                               !hasTableStructuralChanges &&
-                               !hasHeaderFooter;
+    const hasImageChanges = hasImageInserts || hasImageDeletes || hasImageSizeUpdates;
 
-    if (!hasOnlyTextChanges && !hasTableStructuralChanges && !hasHeaderFooter) {
+    const hasOnlyTextChanges = (hasTextReplacements || hasDirectTextUpdates) &&
+                               !this._hasStructuralChanges &&
+                               !hasTableStructuralChanges &&
+                               !hasHeaderFooter &&
+                               !hasImageChanges;
+
+    if (!hasOnlyTextChanges && !hasTableStructuralChanges && !hasHeaderFooter && !hasImageChanges) {
       await this.syncStructuralChangesToZip();
+    }
+
+    if (hasImageChanges) {
+      await this.applyImageChangesToXml();
+      this._pendingImageInserts = [];
+      this._pendingImageDeletes = [];
+      this._pendingImageSizeUpdates = [];
     }
 
     if (hasTableStructuralChanges) {
@@ -1811,6 +2238,7 @@ export class HwpxDocument {
     }
 
     await this.syncMetadataToZip();
+    await this.syncBinDataToHpf();
 
     this._isDirty = false;
     this._hasStructuralChanges = false;
@@ -1848,6 +2276,110 @@ export class HwpxDocument {
         xml = xml.replace(closingSecTag, headerFooterXml + closingSecTag);
       } else if (xml.includes(closingSecTagAlt)) {
         xml = xml.replace(closingSecTagAlt, headerFooterXml + closingSecTagAlt);
+      }
+
+      this._zip.file(sectionPath, xml);
+    }
+  }
+
+  private async applyImageChangesToXml(): Promise<void> {
+    if (!this._zip) return;
+
+    // Collect affected sections
+    const affectedSections = new Set<number>();
+    for (const ins of this._pendingImageInserts) affectedSections.add(ins.sectionIndex);
+    for (const del of this._pendingImageDeletes) affectedSections.add(del.sectionIndex);
+    // Size updates need to scan all sections since they use binaryId
+    if (this._pendingImageSizeUpdates.length > 0) {
+      for (let i = 0; i < this._content.sections.length; i++) affectedSections.add(i);
+    }
+
+    for (const sectionIndex of affectedSections) {
+      const sectionPath = `Contents/section${sectionIndex}.xml`;
+      const file = this._zip.file(sectionPath);
+      if (!file) continue;
+
+      let xml = await file.async('string');
+
+      // Ensure hc namespace is declared if we're inserting images
+      const insertsForSection = this._pendingImageInserts.filter(i => i.sectionIndex === sectionIndex);
+      if (insertsForSection.length > 0 && !xml.includes('xmlns:hc=')) {
+        // Add hc namespace to root element
+        xml = xml.replace(
+          /(<(?:hs|hp):sec\b[^>]*?)(>)/,
+          `$1 xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"$2`
+        );
+      }
+
+      // Apply image deletes: remove <hp:pic> elements with the matching binaryItemIDRef
+      for (const del of this._pendingImageDeletes.filter(d => d.sectionIndex === sectionIndex)) {
+        const escapedId = this.escapeRegex(del.binaryId);
+
+        // Try 1: Remove entire <hp:p> wrapping the image (simple structure from insertImage)
+        const simpleDeleteRegex = new RegExp(
+          `<hp:p\\b[^>]*>\\s*<hp:run[^>]*>\\s*<hp:pic\\b[^>]*>[\\s\\S]*?binaryItemIDRef="${escapedId}"[\\s\\S]*?</hp:pic>\\s*</hp:run>\\s*</hp:p>`,
+          'g'
+        );
+        const xmlAfterSimple = xml.replace(simpleDeleteRegex, '');
+        if (xmlAfterSimple !== xml) {
+          xml = xmlAfterSimple;
+          continue;
+        }
+
+        // Try 2: Remove just the <hp:pic>...</hp:pic> element (for nested cases like subList)
+        const picDeleteRegex = new RegExp(
+          `<hp:pic\\b[^>]*>[\\s\\S]*?binaryItemIDRef="${escapedId}"[\\s\\S]*?</hp:pic>`,
+          'g'
+        );
+        xml = xml.replace(picDeleteRegex, '');
+      }
+
+      // Apply image size updates
+      for (const upd of this._pendingImageSizeUpdates) {
+        // Find the <hp:pic> block containing the binaryItemIDRef
+        const picBlockRegex = new RegExp(
+          `(<hp:pic\\b[^>]*>[\\s\\S]*?binaryItemIDRef="${this.escapeRegex(upd.binaryId)}"[\\s\\S]*?</hp:pic>)`,
+          'g'
+        );
+        xml = xml.replace(picBlockRegex, (picBlock) => {
+          let updated = picBlock;
+          const w = upd.width;
+          const h = upd.height;
+          // Update <hp:curSz>
+          updated = updated.replace(/<hp:curSz\s+width="\d+"[^>]*height="\d+"[^/]*\/>/, `<hp:curSz width="${w}" height="${h}"/>`);
+          // Update <hp:sz>
+          updated = updated.replace(
+            /<hp:sz\s+width="\d+"([^>]*?)height="\d+"([^/]*?)\/>/,
+            `<hp:sz width="${w}"$1height="${h}"$2/>`
+          );
+          return updated;
+        });
+      }
+
+      // Apply image inserts: inject new <hp:p> elements containing <hp:pic>
+      for (const ins of insertsForSection) {
+        const imageXml = this.generateImageXml(ins.image);
+
+        // Find the position to insert: after the Nth top-level element
+        // We insert before the closing </hs:sec> or </hp:sec> tag by default (append)
+        // For more precise positioning, find the afterElementIndex-th <hp:p> or <hp:tbl>
+        const closingTag = xml.includes('</hs:sec>') ? '</hs:sec>' : '</hp:sec>';
+
+        // Also check for header/footer tags that should come after content
+        const headerMatch = xml.match(/<hp:header\b/);
+        const footerMatch = xml.match(/<hp:footer\b/);
+
+        if (headerMatch || footerMatch) {
+          // Insert before header/footer elements
+          const firstSpecialIdx = Math.min(
+            headerMatch ? (headerMatch.index ?? xml.length) : xml.length,
+            footerMatch ? (footerMatch.index ?? xml.length) : xml.length
+          );
+          xml = xml.slice(0, firstSpecialIdx) + imageXml + xml.slice(firstSpecialIdx);
+        } else {
+          // Insert before closing tag
+          xml = xml.replace(closingTag, imageXml + closingTag);
+        }
       }
 
       this._zip.file(sectionPath, xml);
@@ -2142,8 +2674,9 @@ export class HwpxDocument {
       let xml = await file.async('string');
 
       for (const update of this._pendingDirectTextUpdates) {
+        if (!update?.oldText) continue;
         const escapedOld = this.escapeXml(update.oldText);
-        const escapedNew = this.escapeXml(update.newText);
+        const escapedNew = this.escapeXml(update.newText ?? '');
 
         // Replace text anywhere within <hp:t> tags (may contain other tags like <hp:tab/>)
         // First try exact match at the start of <hp:t> content
@@ -2160,6 +2693,7 @@ export class HwpxDocument {
   }
 
   private escapeRegex(str: string): string {
+    if (!str) return '';
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
@@ -2182,7 +2716,9 @@ export class HwpxDocument {
       // Apply each pending replacement to the XML
       for (const replacement of this._pendingTextReplacements) {
         const { oldText, newText, options } = replacement;
-        const { caseSensitive = false, regex = false, replaceAll = true } = options;
+        if (!oldText) continue;
+        const safeNewText = newText ?? '';
+        const { caseSensitive = false, regex = false, replaceAll = true } = options || {};
 
         // Create pattern for matching text inside <hp:t> tags
         let searchPattern: RegExp;
@@ -2194,8 +2730,9 @@ export class HwpxDocument {
         }
 
         // Replace text within <hp:t> tags while preserving XML structure
-        xml = xml.replace(/<hp:t([^>]*)>([^<]*)<\/hp:t>/g, (match, attrs, textContent) => {
-          const newTextContent = textContent.replace(searchPattern, this.escapeXml(newText));
+        xml = xml.replace(/<hp:t([^>]*)>([^<]*)<\/hp:t>/g, (_match, attrs, textContent) => {
+          if (!textContent) return `<hp:t${attrs}></hp:t>`;
+          const newTextContent = textContent.replace(searchPattern, this.escapeXml(safeNewText));
           return `<hp:t${attrs}>${newTextContent}</hp:t>`;
         });
       }
@@ -2228,8 +2765,13 @@ export class HwpxDocument {
   }
 
   private generateSectionXml(section: HwpxSection): string {
+    const hasImages = section.elements.some(el => el.type === 'image');
     let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-    xml += `<hp:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">\n`;
+    xml += `<hp:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"`;
+    if (hasImages) {
+      xml += ` xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"`;
+    }
+    xml += `>\n`;
 
     for (const element of section.elements) {
       if (element.type === 'paragraph') {
@@ -2238,6 +2780,8 @@ export class HwpxDocument {
         xml += this.generateTableXml(element.data as HwpxTable);
       } else if (element.type === 'textbox') {
         xml += this.generateTextBoxXml(element.data as HwpxTextBox);
+      } else if (element.type === 'image') {
+        xml += this.generateImageXml(element.data as HwpxImage);
       }
     }
 
@@ -2246,6 +2790,16 @@ export class HwpxDocument {
     }
     if (section.footer) {
       xml += this.generateHeaderFooterXml(section.footer, 'footer');
+    }
+
+    if (section.memos && section.memos.length > 0) {
+      for (const memo of section.memos) {
+        xml += `  <hp:memo id="${this.escapeXml(memo.id)}" author="${this.escapeXml(memo.author)}" date="${this.escapeXml(memo.date)}">\n`;
+        for (const line of memo.content) {
+          xml += `    <hp:p><hp:run><hp:t>${this.escapeXml(line)}</hp:t></hp:run></hp:p>\n`;
+        }
+        xml += `  </hp:memo>\n`;
+      }
     }
 
     xml += `</hp:sec>`;
@@ -2269,15 +2823,58 @@ export class HwpxDocument {
       xml += ` align="${align}"`;
     }
     xml += `>\n`;
-    
-    for (const run of paragraph.runs) {
-      xml += `${indent}  <hp:run>\n`;
-      if (run.pageNumber) {
+
+    for (const run of (paragraph.runs || [])) {
+      const memoAttr = run.hasMemo && run.memoId ? ` memoId="${this.escapeXml(run.memoId)}"` : '';
+      xml += `${indent}  <hp:run${memoAttr}>\n`;
+      if (run.field && (run.field.fieldType === 'Bookmark' || run.field.fieldType === 'bookmark')) {
+        const bookmarkName = run.field.name || (run.field as any).bookmarkName || '';
+        xml += `${indent}    <hp:ctrl>\n`;
+        xml += `${indent}      <hp:fieldBegin type="BOOKMARK">\n`;
+        xml += `${indent}        <hp:stringParam name="Name">${this.escapeXml(bookmarkName)}</hp:stringParam>\n`;
+        xml += `${indent}      </hp:fieldBegin>\n`;
+        xml += `${indent}    </hp:ctrl>\n`;
+      } else if (run.hyperlink) {
+        const url = run.hyperlink.url || '';
+        xml += `${indent}    <hp:ctrl>\n`;
+        xml += `${indent}      <hp:fieldBegin type="HYPERLINK">\n`;
+        xml += `${indent}        <hp:stringParam name="URL">${this.escapeXml(url)}</hp:stringParam>\n`;
+        xml += `${indent}      </hp:fieldBegin>\n`;
+        xml += `${indent}    </hp:ctrl>\n`;
+        if (run.text) {
+          xml += `${indent}    <hp:t>${this.escapeXml(run.text)}</hp:t>\n`;
+        }
+        xml += `${indent}    <hp:ctrl>\n`;
+        xml += `${indent}      <hp:fieldEnd type="HYPERLINK"/>\n`;
+        xml += `${indent}    </hp:ctrl>\n`;
+      } else if (run.pageNumber) {
         xml += `${indent}    <hp:pageNum/>\n`;
-      } else if (run.text) {
-        xml += `${indent}    <hp:t>${this.escapeXml(run.text)}</hp:t>\n`;
+      } else {
+        xml += `${indent}    <hp:t>${this.escapeXml(run.text || '')}</hp:t>\n`;
       }
       xml += `${indent}  </hp:run>\n`;
+
+      // Generate footnote/endnote element after the run that references it
+      if (run.footnoteRef != null) {
+        const footnote = this._content.footnotes?.find(f => f.number === run.footnoteRef);
+        if (footnote) {
+          xml += `${indent}  <hp:footNote number="${run.footnoteRef}">\n`;
+          for (const para of footnote.paragraphs) {
+            xml += this.generateParagraphXml(para, indentSpaces + 4);
+          }
+          xml += `${indent}  </hp:footNote>\n`;
+        }
+      }
+      if (run.endnoteRef != null) {
+        const endnote = this._content.endnotes?.find(f => f.number === run.endnoteRef);
+        if (endnote) {
+          xml += `${indent}  <hp:endNote number="${run.endnoteRef}">\n`;
+          for (const para of endnote.paragraphs) {
+            xml += this.generateParagraphXml(para, indentSpaces + 4);
+          }
+          xml += `${indent}  </hp:endNote>\n`;
+        }
+      }
     }
     xml += `${indent}</hp:p>\n`;
     return xml;
@@ -2289,22 +2886,25 @@ export class HwpxDocument {
   private generateTableXml(table: HwpxTable): string {
     let xml = `  <hp:tbl rowCount="${table.rowCount}" colCount="${table.colCount}">\n`;
 
-    for (const row of table.rows) {
-      xml += `    <hp:tr>\n`;
-      for (const cell of row.cells) {
-        xml += `      <hp:tc colAddr="${cell.colAddr}" rowAddr="${cell.rowAddr}" colSpan="${cell.colSpan}" rowSpan="${cell.rowSpan}">\n`;
-        for (const para of cell.paragraphs) {
-          xml += `        <hp:p>\n`;
-          for (const run of para.runs) {
-            xml += `          <hp:run>\n`;
-            xml += `            <hp:t>${this.escapeXml(run.text)}</hp:t>\n`;
-            xml += `          </hp:run>\n`;
+    if (table.rows) {
+      for (const row of table.rows) {
+        if (!row?.cells) continue;
+        xml += `    <hp:tr>\n`;
+        for (const cell of row.cells) {
+          xml += `      <hp:tc colAddr="${cell.colAddr}" rowAddr="${cell.rowAddr}" colSpan="${cell.colSpan}" rowSpan="${cell.rowSpan}">\n`;
+          for (const para of (cell.paragraphs || [])) {
+            xml += `        <hp:p>\n`;
+            for (const run of (para.runs || [])) {
+              xml += `          <hp:run>\n`;
+              xml += `            <hp:t>${this.escapeXml(run.text || '')}</hp:t>\n`;
+              xml += `          </hp:run>\n`;
+            }
+            xml += `        </hp:p>\n`;
           }
-          xml += `        </hp:p>\n`;
+          xml += `      </hp:tc>\n`;
         }
-        xml += `      </hp:tc>\n`;
+        xml += `    </hp:tr>\n`;
       }
-      xml += `    </hp:tr>\n`;
     }
 
     xml += `  </hp:tbl>\n`;
@@ -2339,6 +2939,128 @@ export class HwpxDocument {
     xml += `    </hp:run>\n`;
     xml += `  </hp:p>\n`;
     
+    return xml;
+  }
+
+  private toHwpxEnumValue(value: string): string {
+    // Convert camelCase like 'topAndBottom' → 'TOP_AND_BOTTOM', 'bothSides' → 'BOTH_SIDES'
+    return value.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase();
+  }
+
+  private generateImageXml(image: HwpxImage): string {
+    // Dimensions in hwpunit (stored as raw values, multiply by 100 for XML)
+    const widthHwpunit = Math.round(image.width * 100);
+    const heightHwpunit = Math.round(image.height * 100);
+    const orgWidth = image.orgWidth ? Math.round(image.orgWidth * 100) : widthHwpunit;
+    const orgHeight = image.orgHeight ? Math.round(image.orgHeight * 100) : heightHwpunit;
+
+    const numType = this.toHwpxEnumValue(image.numberingType || 'picture');
+    const textWrap = this.toHwpxEnumValue(image.textWrap || 'topAndBottom');
+    const textFlow = this.toHwpxEnumValue(image.textFlow || 'bothSides');
+    const instId = image.shapeComponent?.instId || image.id;
+    const lock = '0';
+    const reverse = image.reverse ? '1' : '0';
+
+    let xml = `  <hp:p>\n`;
+    xml += `    <hp:run>\n`;
+    xml += `      <hp:pic id="${image.id}" zOrder="${image.zOrder ?? 0}" numberingType="${numType}" textWrap="${textWrap}" textFlow="${textFlow}" lock="${lock}" dropcapstyle="None" href="" groupLevel="${image.shapeComponent?.groupLevel ?? 0}" instid="${instId}" reverse="${reverse}">\n`;
+
+    // hp:offset
+    xml += `        <hp:offset x="0" y="0"/>\n`;
+
+    // hp:orgSz - original size
+    xml += `        <hp:orgSz width="${orgWidth}" height="${orgHeight}"/>\n`;
+
+    // hp:curSz - current display size
+    xml += `        <hp:curSz width="${widthHwpunit}" height="${heightHwpunit}"/>\n`;
+
+    // hp:flip
+    const hFlip = image.flip?.horizontal || image.shapeComponent?.horzFlip ? '1' : '0';
+    const vFlip = image.flip?.vertical || image.shapeComponent?.vertFlip ? '1' : '0';
+    xml += `        <hp:flip horizontal="${hFlip}" vertical="${vFlip}"/>\n`;
+
+    // hp:rotationInfo
+    const angle = image.rotation?.angle ?? 0;
+    const centerX = image.rotation?.centerX != null ? Math.round(image.rotation.centerX * 100) : Math.round(widthHwpunit / 2);
+    const centerY = image.rotation?.centerY != null ? Math.round(image.rotation.centerY * 100) : Math.round(heightHwpunit / 2);
+    xml += `        <hp:rotationInfo angle="${angle}" centerX="${centerX}" centerY="${centerY}" rotateimage="0"/>\n`;
+
+    // hp:renderingInfo with identity matrices
+    const scaleX = orgWidth > 0 ? (widthHwpunit / orgWidth).toFixed(6) : '1';
+    const scaleY = orgHeight > 0 ? (heightHwpunit / orgHeight).toFixed(6) : '1';
+    xml += `        <hp:renderingInfo>\n`;
+    xml += `          <hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>\n`;
+    xml += `          <hc:scaMatrix e1="${scaleX}" e2="0" e3="0" e4="0" e5="${scaleY}" e6="0"/>\n`;
+    xml += `          <hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>\n`;
+    xml += `        </hp:renderingInfo>\n`;
+
+    // hc:img - the actual image reference
+    const bright = image.brightness ?? 0;
+    const contrast = image.contrast ?? 0;
+    const alpha = image.alpha != null ? Math.round(image.alpha * 255) : 0;
+    xml += `        <hc:img binaryItemIDRef="${image.binaryId}" bright="${bright}" contrast="${contrast}" effect="REAL_PIC" alpha="${alpha}"/>\n`;
+
+    // hp:imgRect - image rectangle
+    xml += `        <hp:imgRect>\n`;
+    xml += `          <hc:pt0 x="0" y="0"/>\n`;
+    xml += `          <hc:pt1 x="${orgWidth}" y="0"/>\n`;
+    xml += `          <hc:pt2 x="${orgWidth}" y="${orgHeight}"/>\n`;
+    xml += `          <hc:pt3 x="0" y="${orgHeight}"/>\n`;
+    xml += `        </hp:imgRect>\n`;
+
+    // hp:imgClip
+    if (image.imageClip) {
+      xml += `        <hp:imgClip left="${Math.round(image.imageClip.left * 100)}" right="${Math.round(image.imageClip.right * 100)}" top="${Math.round(image.imageClip.top * 100)}" bottom="${Math.round(image.imageClip.bottom * 100)}"/>\n`;
+    } else {
+      xml += `        <hp:imgClip left="0" right="${orgWidth}" top="0" bottom="${orgHeight}"/>\n`;
+    }
+
+    // hp:inMargin
+    const inM = image.inMargin;
+    xml += `        <hp:inMargin left="${inM ? Math.round(inM.left * 100) : 0}" right="${inM ? Math.round(inM.right * 100) : 0}" top="${inM ? Math.round(inM.top * 100) : 0}" bottom="${inM ? Math.round(inM.bottom * 100) : 0}"/>\n`;
+
+    // hp:imgDim
+    xml += `        <hp:imgDim dimwidth="${orgWidth}" dimheight="${orgHeight}"/>\n`;
+
+    // hp:effects (empty)
+    xml += `        <hp:effects/>\n`;
+
+    // hp:sz - size
+    xml += `        <hp:sz width="${widthHwpunit}" widthRelTo="ABSOLUTE" height="${heightHwpunit}" heightRelTo="ABSOLUTE" protect="0"/>\n`;
+
+    // hp:pos - position
+    if (image.position) {
+      const pos = image.position;
+      xml += `        <hp:pos`;
+      xml += ` treatAsChar="${pos.treatAsChar ? '1' : '0'}"`;
+      xml += ` affectLSpacing="${pos.affectLSpacing ? '1' : '0'}"`;
+      xml += ` flowWithText="${pos.flowWithText ? '1' : '0'}"`;
+      xml += ` allowOverlap="${pos.allowOverlap ? '1' : '0'}"`;
+      xml += ` holdAnchorAndSO="${pos.holdAnchorAndSO ? '1' : '0'}"`;
+      xml += ` vertRelTo="${(pos.vertRelTo || 'para').toUpperCase()}"`;
+      xml += ` horzRelTo="${(pos.horzRelTo || 'para').toUpperCase()}"`;
+      xml += ` vertAlign="${(pos.vertAlign || 'top').toUpperCase()}"`;
+      xml += ` horzAlign="${(pos.horzAlign || 'left').toUpperCase()}"`;
+      xml += ` vertOffset="${pos.vertOffset != null ? Math.round(pos.vertOffset * 100) : 0}"`;
+      xml += ` horzOffset="${pos.horzOffset != null ? Math.round(pos.horzOffset * 100) : 0}"`;
+      xml += `/>\n`;
+    } else {
+      xml += `        <hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>\n`;
+    }
+
+    // hp:outMargin
+    const outM = image.outMargin;
+    xml += `        <hp:outMargin left="${outM ? Math.round(outM.left * 100) : 0}" right="${outM ? Math.round(outM.right * 100) : 0}" top="${outM ? Math.round(outM.top * 100) : 0}" bottom="${outM ? Math.round(outM.bottom * 100) : 0}"/>\n`;
+
+    // hp:shapeComment (optional)
+    if (image.shapeComment) {
+      xml += `        <hp:shapeComment>${this.escapeXml(image.shapeComment)}</hp:shapeComment>\n`;
+    }
+
+    xml += `      </hp:pic>\n`;
+    xml += `    </hp:run>\n`;
+    xml += `  </hp:p>\n`;
+
     return xml;
   }
 
@@ -2440,6 +3162,25 @@ export class HwpxDocument {
       });
     });
 
+    // Add/update memos
+    if (section.memos && section.memos.length > 0) {
+      // Remove existing memo elements
+      updatedXml = updatedXml.replace(/<hp:memo\b[^>]*>[\s\S]*?<\/hp:memo>\s*/g, '');
+
+      // Build memo XML
+      let memoXml = '';
+      for (const memo of section.memos) {
+        memoXml += `  <hp:memo id="${this.escapeXml(memo.id)}" author="${this.escapeXml(memo.author)}" date="${this.escapeXml(memo.date)}">\n`;
+        for (const line of memo.content) {
+          memoXml += `    <hp:p><hp:run><hp:t>${this.escapeXml(line)}</hp:t></hp:run></hp:p>\n`;
+        }
+        memoXml += `  </hp:memo>\n`;
+      }
+
+      // Insert before closing </hp:sec> tag
+      updatedXml = updatedXml.replace(/<\/hp:sec>\s*$/, memoXml + '</hp:sec>');
+    }
+
     return updatedXml;
   }
 
@@ -2447,7 +3188,7 @@ export class HwpxDocument {
    * Update paragraph XML with new text content.
    */
   private updateParagraphXml(xml: string, paragraph: HwpxParagraph): string {
-    const fullText = paragraph.runs.map(r => r.text).join('');
+    const fullText = (paragraph.runs || []).map(r => r.text || '').join('');
 
     // Update all <hp:t> tags with the combined text
     // For simplicity, put all text in the first <hp:t> tag and empty the rest
@@ -2492,7 +3233,78 @@ export class HwpxDocument {
     }
   }
 
+  /**
+   * Sync binary data references to Contents/content.hpf (OPF manifest).
+   * Ensures all images in BinData/ are registered as <opf:item> entries.
+   */
+  private async syncBinDataToHpf(): Promise<void> {
+    if (!this._zip) return;
+
+    const hpfPath = 'Contents/content.hpf';
+    let hpfXml = await this._zip.file(hpfPath)?.async('string');
+    if (!hpfXml) return;
+
+    // Collect all BinData files currently in the ZIP
+    const binFiles = Object.keys(this._zip.files).filter(
+      f => f.startsWith('BinData/') && !f.endsWith('/')
+    );
+
+    // Build the set of already-registered item IDs
+    const existingItemIds = new Set<string>();
+    const itemRegex = /<opf:item[^>]*id="([^"]*)"[^>]*href="([^"]*)"[^>]*\/>/g;
+    let match;
+    while ((match = itemRegex.exec(hpfXml)) !== null) {
+      existingItemIds.add(match[1]);
+    }
+
+    // Add missing BinData entries to the manifest
+    const mimeTypeMap: Record<string, string> = {
+      'png': 'image/png',
+      'jpg': 'image/jpg',
+      'jpeg': 'image/jpeg',
+      'gif': 'image/gif',
+      'bmp': 'image/bmp',
+      'tiff': 'image/tiff',
+    };
+
+    let newItems = '';
+    for (const binPath of binFiles) {
+      const fileName = binPath.split('/').pop() || '';
+      const fileId = fileName.replace(/\.[^.]+$/, '');
+      if (existingItemIds.has(fileId)) continue;
+
+      const ext = (fileName.split('.').pop() || 'png').toLowerCase();
+      const mediaType = mimeTypeMap[ext] || 'application/octet-stream';
+      newItems += `<opf:item id="${fileId}" href="${binPath}" media-type="${mediaType}" isEmbeded="1"/>`;
+    }
+
+    if (newItems) {
+      // Insert new items before </opf:manifest>
+      hpfXml = hpfXml.replace('</opf:manifest>', newItems + '</opf:manifest>');
+      this._zip.file(hpfPath, hpfXml);
+    }
+
+    // Remove items for BinData files that no longer exist
+    const currentBinFileIds = new Set(
+      binFiles.map(f => (f.split('/').pop() || '').replace(/\.[^.]+$/, ''))
+    );
+    let modified = false;
+    hpfXml = await this._zip.file(hpfPath)!.async('string');
+    const removeRegex = /<opf:item[^>]*id="([^"]*)"[^>]*href="BinData\/[^"]*"[^>]*\/>/g;
+    hpfXml = hpfXml.replace(removeRegex, (fullMatch, itemId) => {
+      if (!currentBinFileIds.has(itemId)) {
+        modified = true;
+        return '';
+      }
+      return fullMatch;
+    });
+    if (modified) {
+      this._zip.file(hpfPath, hpfXml);
+    }
+  }
+
   private escapeXml(text: string): string {
+    if (!text) return '';
     return text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')

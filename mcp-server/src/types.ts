@@ -852,7 +852,8 @@ export interface CellMargin {
 
 export type CellElement =
   | { type: 'paragraph'; data: HwpxParagraph }
-  | { type: 'table'; data: HwpxTable };
+  | { type: 'table'; data: HwpxTable }
+  | { type: 'image'; data: HwpxImage };
 
 export interface TableCell {
   name?: string;
@@ -923,6 +924,7 @@ export interface HwpxTable {
   outMargin?: ObjectMargin;
   lock?: boolean;
   linesegs?: LineSeg[];
+  caption?: Caption;
 }
 
 // ============================================================
@@ -1065,6 +1067,7 @@ export interface HwpxImage {
   alpha?: number;
   effect?: string;
   shapeComment?: string;
+  caption?: Caption;
 }
 
 // ============================================================
@@ -1369,6 +1372,7 @@ export interface HwpxContainer {
   shapeObject?: ShapeObject;
   shapeComponent?: ShapeComponent;
   children: Array<HwpxLine | HwpxRect | HwpxEllipse | HwpxArc | HwpxPolygon | HwpxCurve | HwpxImage | HwpxContainer>;
+  caption?: Caption;
 }
 
 export interface HwpxOle {
@@ -1552,6 +1556,7 @@ export interface HeaderFooter {
   applyPageType?: PageStartsOn;
   seriesNum?: number;
   paragraphs: HwpxParagraph[];
+  elements?: SectionElement[];
 }
 
 export interface Footnote {

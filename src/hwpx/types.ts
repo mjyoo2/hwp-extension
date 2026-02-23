@@ -1572,6 +1572,7 @@ export interface HeaderFooter {
   applyPageType?: PageStartsOn;
   seriesNum?: number;
   paragraphs: HwpxParagraph[];
+  elements?: SectionElement[];
 }
 
 export interface Footnote {
