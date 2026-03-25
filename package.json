@@ -3,7 +3,7 @@
   "displayName": "HWP/HWPX Editor",
   "description": "View HWP and edit HWPX (Hangul Word Processor) documents in VSCode with AI-powered MCP integration",
   "license": "MIT",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "mjyoo2",
   "icon": "icon.png",
   "repository": {
@@ -70,9 +70,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "npm run compile:extension && npm run compile:mcp",
     "compile:extension": "npx esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
-    "compile:mcp": "npx esbuild ./src/mcp/server.ts --bundle --outfile=out/mcp-server.js --format=cjs --platform=node",
-    "compile:compare": "npx esbuild ./scripts/compare-parsers.ts --bundle --outfile=out/compare-parsers.js --format=cjs --platform=node",
-    "compare": "npm run compile:compare && node out/compare-parsers.js",
+    "compile:mcp": "npx esbuild ./mcp-server/src/index.ts --bundle --outfile=out/mcp-server.js --format=cjs --platform=node",
     "watch": "npm run compile:extension -- --watch",
     "package": "vsce package"
   },
@@ -81,8 +79,6 @@
     "@types/pako": "^2.0.4",
     "@types/vscode": "^1.107.0",
     "esbuild": "^0.27.2",
-    "mammoth": "^1.11.0",
-    "pdf-parse": "^1.1.4",
     "typescript": "^5.9.3"
   },
   "dependencies": {

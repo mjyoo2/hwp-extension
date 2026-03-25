@@ -25,6 +25,10 @@ test_*.hwpx
 # IDE/Editor
 .mcp.json
 
+# Claude Code / OMC
+.omc/
+.sisyphus/
+
 # OS
 .DS_Store
 Thumbs.db
