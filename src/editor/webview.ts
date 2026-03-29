@@ -366,6 +366,8 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
     }
     .image-container { margin: 16px 0; text-align: center; }
     .image-container img { max-width: 100%; height: auto; border: 1px solid #ddd; }
+    td .image-container { margin: 4px 0; }
+    td .image-container img { max-width: 100%; height: auto; }
     .list-item { padding-left: 24px; position: relative; }
     .list-item::before { position: absolute; left: 8px; }
     .list-item.bullet::before { content: "•"; }
@@ -807,6 +809,7 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
     let documentContent = null;
     let selectedElement = null;
     let isReadOnlyMode = false;
+    let cachedWordCount = 0;
 
     function renderDocument(content) {
       documentContent = content;
@@ -860,6 +863,20 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
         if (section.memos && section.memos.length > 0) {
           allMemos.push(...section.memos);
         }
+      });
+
+      // Compute word count from content data (not DOM traversal)
+      cachedWordCount = 0;
+      content.sections.forEach(section => {
+        section.elements.forEach(element => {
+          if (element.type === 'paragraph' && element.data && element.data.runs) {
+            element.data.runs.forEach(run => {
+              if (run.text && run.text.trim()) {
+                cachedWordCount += run.text.trim().split(/\s+/).length;
+              }
+            });
+          }
+        });
       });
 
       container.innerHTML = html;
@@ -1396,41 +1413,79 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
           cellStyle += 'padding:' + padTop + 'pt ' + padRight + 'pt ' + padBottom + 'pt ' + padLeft + 'pt;';
           
           html += '<td' + cellAttrs + ' style="' + cellStyle + '">';
-          
-          if (cell.nestedTables && cell.nestedTables.length > 0) {
-            cell.nestedTables.forEach(nestedTbl => {
-              html += renderNestedTable(nestedTbl);
+
+          if (cell.elements && cell.elements.length > 0) {
+            cell.elements.forEach((el, elIndex) => {
+              if (el.type === 'paragraph') {
+                const p = el.data;
+                let paraStyle = '';
+                if (p.paraStyle) {
+                  if (p.paraStyle.align) paraStyle += 'text-align:' + p.paraStyle.align.toLowerCase() + ';';
+                  if (p.paraStyle.lineSpacing) paraStyle += 'line-height:' + (p.paraStyle.lineSpacing / 100) + ';';
+                  if (p.paraStyle.marginTop) paraStyle += 'margin-top:' + p.paraStyle.marginTop + 'pt;';
+                  if (p.paraStyle.marginBottom) paraStyle += 'margin-bottom:' + p.paraStyle.marginBottom + 'pt;';
+                  const marginLeftVal = p.paraStyle.marginLeft || 0;
+                  const firstLineIndentVal = p.paraStyle.firstLineIndent || 0;
+                  if (firstLineIndentVal < 0) {
+                    const hangAmount = Math.abs(firstLineIndentVal);
+                    const extraPad = Math.max(0, hangAmount - marginLeftVal);
+                    if (extraPad > 0) paraStyle += 'padding-left:' + extraPad + 'pt;';
+                    if (marginLeftVal > 0) paraStyle += 'margin-left:' + marginLeftVal + 'pt;';
+                    paraStyle += 'text-indent:' + firstLineIndentVal + 'pt;';
+                  } else {
+                    if (marginLeftVal > 0) paraStyle += 'margin-left:' + marginLeftVal + 'pt;';
+                    if (firstLineIndentVal > 0) paraStyle += 'text-indent:' + firstLineIndentVal + 'pt;';
+                  }
+                }
+                html += '<div class="cell-content"' + (paraStyle ? ' style="' + paraStyle + '"' : '') + '>';
+                p.runs.forEach((run, runIndex) => {
+                  html += renderTextRun(run, runIndex);
+                });
+                if (p.runs.length === 0 || p.runs.every(r => !r.text && !r.tab)) html += '<br>';
+                html += '</div>';
+              } else if (el.type === 'table') {
+                html += renderNestedTable(el.data);
+              } else if (el.type === 'image') {
+                html += renderImage(el.data, 0, 0);
+              } else if (el.type === 'equation') {
+                html += renderEquation(el.data, 0, 0);
+              }
+            });
+          } else {
+            if (cell.nestedTables && cell.nestedTables.length > 0) {
+              cell.nestedTables.forEach(nestedTbl => {
+                html += renderNestedTable(nestedTbl);
+              });
+            }
+
+            cell.paragraphs.forEach((p, pIndex) => {
+              let paraStyle = '';
+              if (p.paraStyle) {
+                if (p.paraStyle.align) paraStyle += 'text-align:' + p.paraStyle.align.toLowerCase() + ';';
+                if (p.paraStyle.lineSpacing) paraStyle += 'line-height:' + (p.paraStyle.lineSpacing / 100) + ';';
+                if (p.paraStyle.marginTop) paraStyle += 'margin-top:' + p.paraStyle.marginTop + 'pt;';
+                if (p.paraStyle.marginBottom) paraStyle += 'margin-bottom:' + p.paraStyle.marginBottom + 'pt;';
+                const marginLeftVal = p.paraStyle.marginLeft || 0;
+                const firstLineIndentVal = p.paraStyle.firstLineIndent || 0;
+                if (firstLineIndentVal < 0) {
+                  const hangAmount = Math.abs(firstLineIndentVal);
+                  const extraPad = Math.max(0, hangAmount - marginLeftVal);
+                  if (extraPad > 0) paraStyle += 'padding-left:' + extraPad + 'pt;';
+                  if (marginLeftVal > 0) paraStyle += 'margin-left:' + marginLeftVal + 'pt;';
+                  paraStyle += 'text-indent:' + firstLineIndentVal + 'pt;';
+                } else {
+                  if (marginLeftVal > 0) paraStyle += 'margin-left:' + marginLeftVal + 'pt;';
+                  if (firstLineIndentVal > 0) paraStyle += 'text-indent:' + firstLineIndentVal + 'pt;';
+                }
+              }
+              html += '<div class="cell-content"' + (paraStyle ? ' style="' + paraStyle + '"' : '') + '>';
+              p.runs.forEach((run, runIndex) => {
+                html += renderTextRun(run, runIndex);
+              });
+              if (p.runs.length === 0 || p.runs.every(r => !r.text && !r.tab)) html += '<br>';
+              html += '</div>';
             });
           }
-          
-          cell.paragraphs.forEach((p, pIndex) => {
-            let paraStyle = '';
-            if (p.paraStyle) {
-              if (p.paraStyle.align) paraStyle += 'text-align:' + p.paraStyle.align.toLowerCase() + ';';
-              if (p.paraStyle.lineSpacing) paraStyle += 'line-height:' + (p.paraStyle.lineSpacing / 100) + ';';
-              if (p.paraStyle.marginTop) paraStyle += 'margin-top:' + p.paraStyle.marginTop + 'pt;';
-              if (p.paraStyle.marginBottom) paraStyle += 'margin-bottom:' + p.paraStyle.marginBottom + 'pt;';
-              // Handle hanging indent (negative firstLineIndent) properly in nested table cells
-              const marginLeftVal = p.paraStyle.marginLeft || 0;
-              const firstLineIndentVal = p.paraStyle.firstLineIndent || 0;
-              if (firstLineIndentVal < 0) {
-                const hangAmount = Math.abs(firstLineIndentVal);
-                const extraPad = Math.max(0, hangAmount - marginLeftVal);
-                if (extraPad > 0) paraStyle += 'padding-left:' + extraPad + 'pt;';
-                if (marginLeftVal > 0) paraStyle += 'margin-left:' + marginLeftVal + 'pt;';
-                paraStyle += 'text-indent:' + firstLineIndentVal + 'pt;';
-              } else {
-                if (marginLeftVal > 0) paraStyle += 'margin-left:' + marginLeftVal + 'pt;';
-                if (firstLineIndentVal > 0) paraStyle += 'text-indent:' + firstLineIndentVal + 'pt;';
-              }
-            }
-            html += '<div class="cell-content"' + (paraStyle ? ' style="' + paraStyle + '"' : '') + '>';
-            p.runs.forEach((run, runIndex) => {
-              html += renderTextRun(run, runIndex);
-            });
-            if (p.runs.length === 0 || p.runs.every(r => !r.text && !r.tab)) html += '<br>';
-            html += '</div>';
-          });
           html += '</td>';
         });
         html += '</tr>';
@@ -1822,18 +1877,31 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       return html;
     }
 
+    let _eventListenersAttached = false;
     function attachEventListeners() {
-      document.querySelectorAll('.paragraph').forEach(el => {
-        el.addEventListener('blur', handleParagraphBlur);
-        el.addEventListener('focus', handleElementFocus);
-        el.addEventListener('keydown', handleKeyDown);
+      const container = document.getElementById('document');
+      if (!container || _eventListenersAttached) return;
+      _eventListenersAttached = true;
+
+      // Use event delegation instead of per-element listeners
+      container.addEventListener('blur', (e) => {
+        if (e.target.classList.contains('paragraph')) handleParagraphBlur(e);
+        else if (e.target.classList.contains('cell-content')) handleCellBlur(e);
+      }, true);
+
+      container.addEventListener('focus', (e) => {
+        if (e.target.classList.contains('paragraph') || e.target.classList.contains('cell-content')) {
+          handleElementFocus(e);
+        }
+      }, true);
+
+      container.addEventListener('keydown', (e) => {
+        if (e.target.classList.contains('paragraph')) handleKeyDown(e);
       });
-      document.querySelectorAll('.cell-content').forEach(el => {
-        el.addEventListener('blur', handleCellBlur);
-        el.addEventListener('focus', handleElementFocus);
-      });
-      document.querySelectorAll('.element').forEach(el => {
-        el.addEventListener('contextmenu', handleContextMenu);
+
+      container.addEventListener('contextmenu', (e) => {
+        const element = e.target.closest('.element');
+        if (element) handleContextMenu(e);
       });
     }
 
@@ -2372,19 +2440,29 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
       let prevVertend = 0;
       let pageStartIdx = 0; // Track start of current page
 
-      // Helper function to collect footnotes from elements in a range
+      // Pre-build a Map of footnote numbers by element index (avoids O(n²) querySelectorAll per element)
+      const allFootnoteRefs = document.querySelectorAll('[data-footnote]');
+      const footnoteByElementIndex = new Map(); // elementIndex -> Set<number>
+      allFootnoteRefs.forEach(fn => {
+        const parentEl = fn.closest('.element, .paragraph, .table-wrapper');
+        if (parentEl) {
+          const idx = elementsArray.indexOf(parentEl);
+          if (idx !== -1) {
+            if (!footnoteByElementIndex.has(idx)) footnoteByElementIndex.set(idx, new Set());
+            const fnNum = parseInt(fn.getAttribute('data-footnote'));
+            if (fnNum && footnotesMap[fnNum]) {
+              footnoteByElementIndex.get(idx).add(fnNum);
+            }
+          }
+        }
+      });
+
+      // Helper function to collect footnotes from elements in a range using pre-built Map
       function collectPageFootnotes(startIdx, endIdx) {
         const fnNumbers = new Set();
         for (let j = startIdx; j < endIdx && j < elementsArray.length; j++) {
-          const el = elementsArray[j];
-          // Find all footnote references within this element
-          const fnRefs = el.querySelectorAll('[data-footnote]');
-          fnRefs.forEach(ref => {
-            const fnNum = parseInt(ref.dataset.footnote);
-            if (fnNum && footnotesMap[fnNum]) {
-              fnNumbers.add(fnNum);
-            }
-          });
+          const elFns = footnoteByElementIndex.get(j);
+          if (elFns) elFns.forEach(num => fnNumbers.add(num));
         }
         return Array.from(fnNumbers).sort((a, b) => a - b);
       }
@@ -2510,15 +2588,14 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
     }
 
     function updateWordCount() {
-      let wordCount = 0;
-      document.querySelectorAll('.paragraph').forEach(el => {
-        const text = el.textContent.trim();
-        if (text) wordCount += text.split(/\\s+/).length;
-      });
-      document.getElementById('statusWordCount').textContent = 'Words: ' + wordCount;
+      document.getElementById('statusWordCount').textContent = 'Words: ' + cachedWordCount;
     }
 
-    document.addEventListener('selectionchange', updateToolbarState);
+    let selectionTimer = null;
+    document.addEventListener('selectionchange', () => {
+      if (selectionTimer) clearTimeout(selectionTimer);
+      selectionTimer = setTimeout(updateToolbarState, 100);
+    });
 
     document.addEventListener('keydown', function(e) {
       if (e.ctrlKey || e.metaKey) {
@@ -2807,14 +2884,23 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
 
     function escapeHtml(text) {
       if (!text) return '';
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                 .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
     window.addEventListener('message', event => {
       const message = event.data;
       if (message.type === 'update') renderDocument(message.content);
+      if (message.type === 'updateImages') {
+        // Replace deferred image placeholders with actual data
+        const imageData = message.imageData;
+        document.querySelectorAll('img[src^="__deferred:"]').forEach(img => {
+          const id = img.getAttribute('src').replace('__deferred:', '');
+          if (imageData[id]) {
+            img.setAttribute('src', imageData[id]);
+          }
+        });
+      }
     });
 
     let findMatches = [];

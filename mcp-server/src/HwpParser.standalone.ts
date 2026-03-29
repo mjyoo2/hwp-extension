@@ -12,6 +12,7 @@ import {
   HwpxParagraph,
   TextRun,
   HwpxImage,
+  HwpxEquation,
   HwpxTable,
   TableRow,
   TableCell,
@@ -273,6 +274,7 @@ interface ParseContext {
   tableColCount: number;
   tableCells: TableCell[][];
   pendingImage: { width: number; height: number } | null;
+  pendingSectionImages: HwpxImage[];
   faceNames: Map<number, ParsedFaceName>;
   charShapes: Map<number, ParsedCharShape>;
   paraShapes: Map<number, ParsedParaShape>;
@@ -294,6 +296,7 @@ interface ParseContext {
   memos: ParsedMemoShape[];
   inShapeText: boolean;
   shapeTextParagraphs: HwpxParagraph[];
+  inEquation: boolean;
 }
 
 // ============================================================
@@ -419,7 +422,7 @@ function colorrefToHex(colorref: number): string {
   const r = colorref & 0xFF;
   const g = (colorref >> 8) & 0xFF;
   const b = (colorref >> 16) & 0xFF;
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+  return `#${r.toString(16).padStart(2, '0').toUpperCase()}${g.toString(16).padStart(2, '0').toUpperCase()}${b.toString(16).padStart(2, '0').toUpperCase()}`;
 }
 
 function hwpunitToPt(hwpunit: number): number {
@@ -700,17 +703,31 @@ function parseBorderFillStandalone(data: Uint8Array): ParsedBorderFill | null {
   const slashDiagonal = (props >> 2) & 0x07;
   const backslashDiagonal = (props >> 5) & 0x07;
 
-  const borderTypes = [data[2], data[3], data[4], data[5]];
-  const borderWidths = [data[6], data[7], data[8], data[9]];
+  // HWP 5.0 spec: border data layout is NOT grouped per-border.
+  // It's: 4 types (1 byte each), then 4 widths (1 byte each), then 4 colors (4 bytes each)
+  // Order within each group: left, right, top, bottom
+  // Offset 2: types[4], offset 6: widths[4], offset 10: colors[16]
+  const borderWidthMm = [0.1, 0.12, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0];
+  const borderTypes = [data[2], data[3], data[4], data[5]];       // left, right, top, bottom
+  const borderWidths = [data[6], data[7], data[8], data[9]];      // left, right, top, bottom
   const borderColors = [
-    readUint32(data, 10),
-    readUint32(data, 14),
-    readUint32(data, 18),
-    readUint32(data, 22),
+    readUint32(data, 10), readUint32(data, 14),                    // left, right
+    readUint32(data, 18), readUint32(data, 22),                    // top, bottom
   ];
 
+  const makeBorder = (i: number): ParsedBorderLine => ({
+    type: borderTypes[i],
+    width: borderWidthMm[borderWidths[i]] ?? 0.1,
+    color: borderColors[i],
+  });
+
+  const leftBorder = makeBorder(0);
+  const rightBorder = makeBorder(1);
+  const topBorder = makeBorder(2);
+  const bottomBorder = makeBorder(3);
+
   const diagonalType = data[26];
-  const diagonalWidth = data[27];
+  const diagonalWidth = borderWidthMm[data[27]] ?? 0.1;
   const diagonalColor = readUint32(data, 28);
 
   const result: ParsedBorderFill = {
@@ -719,10 +736,10 @@ function parseBorderFillStandalone(data: Uint8Array): ParsedBorderFill | null {
     slashDiagonal,
     backslashDiagonal,
     borders: {
-      left: { type: borderTypes[0], width: borderWidths[0], color: borderColors[0] },
-      right: { type: borderTypes[1], width: borderWidths[1], color: borderColors[1] },
-      top: { type: borderTypes[2], width: borderWidths[2], color: borderColors[2] },
-      bottom: { type: borderTypes[3], width: borderWidths[3], color: borderColors[3] },
+      left: leftBorder,
+      right: rightBorder,
+      top: topBorder,
+      bottom: bottomBorder,
     },
   };
 
@@ -822,6 +839,7 @@ function parseSectionData(
     tableColCount: 0,
     tableCells: [],
     pendingImage: null,
+    pendingSectionImages: [],
     faceNames,
     charShapes,
     paraShapes,
@@ -843,6 +861,7 @@ function parseSectionData(
     memos: [],
     inShapeText: false,
     shapeTextParagraphs: [],
+    inEquation: false,
   };
 
   let offset = 0;
@@ -953,7 +972,49 @@ function parseSectionData(
     const row = ctx.currentTableRow;
     const col = ctx.currentTableCol;
     if (row < ctx.tableRowCount && col < ctx.tableColCount && ctx.tableCells[row]) {
-      ctx.tableCells[row][col].paragraphs = [...ctx.cellParagraphs];
+      // Normalize cell paragraphs: remove leading/trailing empty paragraphs and
+      // collapse consecutive empty paragraphs into one to match HWPX output.
+      let normalized = [...ctx.cellParagraphs];
+      const isEmptyParagraph = (p: typeof normalized[0]) =>
+        p.runs.every(r => !r.text || r.text.trim() === '');
+      // Remove leading empty paragraphs
+      while (normalized.length > 0 && isEmptyParagraph(normalized[0])) {
+        normalized.shift();
+      }
+      // Remove trailing empty paragraphs
+      while (normalized.length > 0 && isEmptyParagraph(normalized[normalized.length - 1])) {
+        normalized.pop();
+      }
+      // Collapse consecutive empty paragraphs into one
+      const collapsed: typeof normalized = [];
+      let prevWasEmpty = false;
+      for (const p of normalized) {
+        const empty = isEmptyParagraph(p);
+        if (empty && prevWasEmpty) continue;
+        collapsed.push(p);
+        prevWasEmpty = empty;
+      }
+      ctx.tableCells[row][col].paragraphs = collapsed;
+      // Populate cell.elements from paragraphs to match HWPX structure.
+      // The webview uses cell.elements when available, falling back to cell.paragraphs.
+      if (!ctx.tableCells[row][col].elements) ctx.tableCells[row][col].elements = [];
+      for (const p of collapsed) {
+        ctx.tableCells[row][col].elements!.push({ type: 'paragraph', data: p });
+      }
+    }
+
+    // Calculate table width and columnWidths from first row cells
+    if (ctx.tableColCount > 0 && ctx.tableCells[0]) {
+      const colWidths: number[] = [];
+      let totalWidth = 0;
+      for (let c = 0; c < ctx.tableColCount; c++) {
+        const cell = ctx.tableCells[0][c];
+        const w = cell?.width || 0;
+        colWidths.push(w);
+        totalWidth += w;
+      }
+      ctx.currentTable.columnWidths = colWidths;
+      ctx.currentTable.width = totalWidth;
     }
 
     const coveredCells = new Set<string>();
@@ -980,6 +1041,10 @@ function parseSectionData(
         const cell = ctx.tableCells[r]?.[c];
         if (cell) {
           if (cell.paragraphs.length === 0) cell.paragraphs.push({ id: generateId(), runs: [{ text: '' }] });
+          // Ensure cell.elements is populated from paragraphs (+ any existing elements like nested tables)
+          if (!cell.elements || cell.elements.length === 0) {
+            cell.elements = cell.paragraphs.map(p => ({ type: 'paragraph' as const, data: p }));
+          }
           cells.push(cell);
         }
       }
@@ -1004,6 +1069,16 @@ function parseSectionData(
      }
 
      if ((global as any).__HWP_TRACE_ACTIVE && !isNested) { (global as any).__HWP_TRACE_ACTIVE = false; console.log(`=== TABLE END ===\n`); }
+
+     // After outermost table finishes, flush any deferred section-level images
+     // so they appear after their containing table (matching HWPX element ordering).
+     if (!isNested && ctx.pendingSectionImages.length > 0) {
+       for (const img of ctx.pendingSectionImages) {
+         section.elements.push({ type: 'image', data: img });
+       }
+       ctx.pendingSectionImages = [];
+     }
+
      ctx.currentTable = null;
      ctx.inTableCell = false;
      ctx.cellParagraphs = [];
@@ -1040,7 +1115,7 @@ function parseSectionData(
 
      prevLevel = level;
 
-      const recordData = data.slice(nextOffset, nextOffset + size);
+      const recordData = data.subarray(nextOffset, nextOffset + size);
 
       if ((global as any).__HWP_TRACE_TAGS && (global as any).__HWP_TRACE_ACTIVE) {
         const _tn: Record<number, string> = {66:'PARA_HDR',67:'PARA_TXT',68:'PARA_CS',69:'PARA_LS',70:'PARA_RT',71:'CTRL_HDR',72:'LIST_HDR',73:'PAGE_DEF',77:'TABLE',76:'SHAPE_COMP',85:'SHAPE_PIC',87:'SHAPE_TBOX'};
@@ -1095,6 +1170,19 @@ function parseSectionData(
             } else {
               ctx.inShapeText = false;
               shapeTextLevel = -1;
+              // If this was an equation context, emit the equation element
+              if (ctx.inEquation) {
+                const script = ctx.shapeTextParagraphs
+                  .flatMap(p => p.runs.map(r => r.text))
+                  .join('');
+                const equation: HwpxEquation = { id: generateId(), script };
+                // Always emit equations at section level to match HWPX behavior
+                if (!ctx.inHeaderFooter && !ctx.inFootnoteEndnote) {
+                  section.elements.push({ type: 'equation', data: equation });
+                }
+                ctx.inEquation = false;
+              }
+              ctx.shapeTextParagraphs = [];
             }
           }
         }
@@ -1155,7 +1243,7 @@ function parseSectionData(
         paraTextWasPresent = true;
         if (ctx.currentParagraph) {
           let currentStart = 0;
-          let currentText = '';
+          const charCodes: number[] = [];
           let charIndex = 0;
           let i = 0;
           while (i < recordData.length - 1) {
@@ -1163,15 +1251,15 @@ function parseSectionData(
             i += 2;
             if (charCode === 0) { charIndex++; continue; }
             if (charCode < 32) {
-              if (currentText) {
-                ctx.pendingTextSegments.push({ start: currentStart, end: charIndex, text: currentText });
-                currentText = '';
+              if (charCodes.length > 0) {
+                ctx.pendingTextSegments.push({ start: currentStart, end: charIndex, text: charCodes.map(c => String.fromCharCode(c)).join('') });
+                charCodes.length = 0;
               }
               if (charCode === CTRL_CHAR.LINE_BREAK) {
                 ctx.pendingTextSegments.push({ start: charIndex, end: charIndex + 1, text: '\n' });
                 charIndex++;
               } else if (charCode === 0x0009) {
-                ctx.pendingTextSegments.push({ start: charIndex, end: charIndex + 8, text: '\t' });
+                // Skip tab text to match HWPX behavior (tabs become empty runs with tab property)
                 i += 14; charIndex += 8;
                } else if (charCode >= 0x0002 && charCode <= 0x0008) {
                  paraTextHadInlineControls = true;
@@ -1196,11 +1284,11 @@ function parseSectionData(
               currentStart = charIndex;
               continue;
             }
-            currentText += String.fromCharCode(charCode);
+            charCodes.push(charCode);
             charIndex++;
           }
-          if (currentText) {
-            ctx.pendingTextSegments.push({ start: currentStart, end: charIndex, text: currentText });
+          if (charCodes.length > 0) {
+            ctx.pendingTextSegments.push({ start: currentStart, end: charIndex, text: charCodes.map(c => String.fromCharCode(c)).join('') });
           }
         }
         break;
@@ -1233,6 +1321,59 @@ function parseSectionData(
                  });
               }
               ctx.currentTable = { id: generateId(), rows: [], rowCount: 0, colCount: 0 };
+
+              // Parse table-level fields from CTRL_HEADER common object header
+              if (recordData.length >= 24) {
+                const props = readUint32(recordData, 4);
+                const treatAsChar = !!(props & (1 << 4));
+
+                if (treatAsChar) {
+                  // Inline table: textWrap=topAndBottom, relative to paragraph
+                  ctx.currentTable.textWrap = 'topAndBottom' as any;
+                  ctx.currentTable.position = {
+                    treatAsChar: true,
+                    flowWithText: true,
+                    vertRelTo: 'para' as any,
+                    horzRelTo: 'para' as any,
+                    vertAlign: 'top' as any,
+                    horzAlign: 'left' as any,
+                    vertOffset: 0,
+                    horzOffset: 0,
+                  };
+                } else {
+                  // Floating table: parse wrap/position from properties
+                  const textWrapVal = (props >> 1) & 0x07;
+                  const textWrapMap: Record<number, string> = {
+                    0: 'square', 1: 'topAndBottom', 2: 'behindText', 3: 'inFrontOfText',
+                    4: 'tight', 5: 'through'
+                  };
+                  const vertRelVal = (props >> 5) & 0x03;
+                  const vertRelMap: Record<number, string> = { 0: 'paper', 1: 'page', 2: 'para' };
+                  const horzRelVal = (props >> 9) & 0x03;
+                  const horzRelMap: Record<number, string> = { 0: 'paper', 1: 'page', 2: 'column', 3: 'para' };
+
+                  ctx.currentTable.textWrap = (textWrapMap[textWrapVal] || 'topAndBottom') as any;
+                  ctx.currentTable.position = {
+                    treatAsChar: false,
+                    flowWithText: !!(props & (1 << 12)),
+                    vertRelTo: (vertRelMap[vertRelVal] || 'para') as any,
+                    horzRelTo: (horzRelMap[horzRelVal] || 'column') as any,
+                    vertOffset: readInt32(recordData, 8) / 7200 * 72,
+                    horzOffset: readInt32(recordData, 12) / 7200 * 72,
+                  };
+                }
+              }
+              // Parse outMargin (4 x uint16 at offset 28: left, right, top, bottom) after zOrder at 24
+              if (recordData.length >= 36) {
+                ctx.currentTable.outMargin = {
+                  left: readUint16(recordData, 28) / 100,
+                  right: readUint16(recordData, 30) / 100,
+                  top: readUint16(recordData, 32) / 100,
+                  bottom: readUint16(recordData, 34) / 100,
+                };
+              }
+              // borderFillId and pageBreak/repeatHeader will be filled from HWPTAG_TABLE record
+
               ctx.tableCells = [];
               ctx.inTableCell = false;
               ctx.cellParagraphs = [];
@@ -1267,6 +1408,15 @@ function parseSectionData(
              ctx.inFootnoteEndnote = true;
              ctx.footnoteEndnoteParagraphs = [];
              footnoteEndnoteLevel = level;
+           } else if (ctx.currentCtrlId === CTRL_ID.EQUATION) {
+              ctx.inEquation = true;
+              ctx.equationScript = '';
+              if (ctx.inShapeText && shapeTextLevel >= 0) {
+                shapeTextStack.push({ level: shapeTextLevel, paragraphs: ctx.shapeTextParagraphs });
+              }
+              ctx.inShapeText = true;
+              ctx.shapeTextParagraphs = [];
+              shapeTextLevel = level;
            } else if (ctx.currentCtrlId === CTRL_ID.FIELD_MEMO) {
              ctx.inMemo = true;
              ctx.memoParagraphs = [];
@@ -1307,6 +1457,33 @@ function parseSectionData(
 
           const cellSpacing = recordData.length >= 10 ? readUint16(recordData, 8) / 7200 * 72 : 0;
           ctx.currentTable.cellSpacing = cellSpacing;
+
+          // Extract table internal cell padding (inMargin) from border padding fields
+          if (recordData.length >= 18) {
+            ctx.currentTable.inMargin = {
+              left: readUint16(recordData, 10) / 7200 * 72,
+              right: readUint16(recordData, 12) / 7200 * 72,
+              top: readUint16(recordData, 14) / 7200 * 72,
+              bottom: readUint16(recordData, 16) / 7200 * 72,
+            };
+          }
+
+          // borderFillId at offset 18 (uint16, 1-based -> convert to 0-based)
+          if (recordData.length >= 20) {
+            const bfId = readUint16(recordData, 18);
+            if (bfId > 0) ctx.currentTable.borderFillId = bfId;
+          }
+
+          // Parse properties flags at offset 0 (uint32): pageBreak and repeatHeader
+          if (recordData.length >= 4) {
+            const tableProps = readUint32(recordData, 0);
+            // bit 0-1: pageBreak (0=none, 1=cell, 2=row)
+            const pageBreakVal = tableProps & 0x03;
+            const pageBreakMap: Record<number, string> = { 0: 'none', 1: 'cell', 2: 'row' };
+            ctx.currentTable.pageBreak = (pageBreakMap[pageBreakVal] || 'none') as any;
+            // bit 2: repeatHeader
+            ctx.currentTable.repeatHeader = !!(tableProps & (1 << 2));
+          }
 
           ctx.currentTableRow = 0;
           ctx.currentTableCol = 0;
@@ -1351,6 +1528,22 @@ function parseSectionData(
            const marginBottom = readUint16(recordData, headerSize + 22) / 7200 * 72;
            const borderFillId = recordData.length > headerSize + 24 ? readUint16(recordData, headerSize + 24) : 0;
 
+           // Extract verticalAlign from list header flags (offset 2, 4 bytes)
+           const listFlags = readUint32(recordData, 2);
+           // Bits 20-21: vertical alignment (0=font-based→top, 1=top, 2=center/middle, 3=bottom)
+           const vertAlignBits = (listFlags >> 20) & 0x03;
+           const verticalAlign: 'top' | 'middle' | 'bottom' = vertAlignBits === 2 ? 'middle' : vertAlignBits === 3 ? 'bottom' : 'top';
+
+           // hasMargin: In HWPX, hasMargin="0" means use table's inMargin, "1" means use cell's own margin.
+           // In HWP binary, cell margins are always stored. Compare against table inMargin to determine.
+           const tableInMargin = ctx.currentTable.inMargin;
+           const hasMargin = tableInMargin ? !(
+             Math.abs(marginLeft - tableInMargin.left) < 0.01 &&
+             Math.abs(marginRight - tableInMargin.right) < 0.01 &&
+             Math.abs(marginTop - tableInMargin.top) < 0.01 &&
+             Math.abs(marginBottom - tableInMargin.bottom) < 0.01
+           ) : false;
+
            ctx.currentTableCol = cellCol;
            ctx.currentTableRow = cellRow;
 
@@ -1365,19 +1558,37 @@ function parseSectionData(
             cell.marginTop = marginTop;
             cell.marginBottom = marginBottom;
             cell.borderFillId = borderFillId;
+            cell.verticalAlign = verticalAlign;
+            cell.hasMargin = hasMargin;
+            cell.textDirection = 'horizontal';
+            cell.lineWrap = 'break';
 
             const borderFill = ctx.borderFills.get(borderFillId);
             if (borderFill) {
               const fill = borderFill.fill;
               if (fill && fill.fillType === 'solid' && fill.backgroundColor !== undefined) {
                 cell.backgroundColor = colorrefToHex((fill as ParsedSolidFill).backgroundColor);
+              } else if (fill && fill.fillType === 'gradient' && (fill as ParsedGradientFill).colors && (fill as ParsedGradientFill).colors.length > 0) {
+                const gf = fill as ParsedGradientFill;
+                const gradTypeMap: Record<number, string> = { 1: 'Linear', 2: 'Radial', 3: 'Conical', 4: 'Square' };
+                cell.backgroundGradation = {
+                  type: gradTypeMap[gf.gradientType] || 'Linear',
+                  angle: gf.angle || 0,
+                  colors: gf.colors.map(c => colorrefToHex(c.color)),
+                };
               }
               if (borderFill.borders) {
-                const mapBorder = (b: ParsedBorderLine) => ({
-                  width: b.width * 0.1,
-                  style: b.type === 0 ? 'none' : 'solid',
-                  color: colorrefToHex(b.color)
-                });
+                // HWP 5.0 border type: 0=none,1=solid,2=dash,3=dot,4=dash-dot,5=dash-dot-dot,6=long-dash,7=circle,8=double,9=thin-thick,10=thick-thin,11=thin-thick-thin,12=wave,13=double-wave,14=thick-3d,15=thin-3d-reverse,16=3d,17=3d-reverse
+                const borderStyleMap: Record<number, string> = { 0: 'none', 1: 'solid', 2: 'dashed', 3: 'dotted', 4: 'dashed', 5: 'dashed', 6: 'dashed', 7: 'dotted', 8: 'double', 255: 'none' };
+                const mapBorder = (b: ParsedBorderLine) => {
+                  const style = borderStyleMap[b.type] ?? 'solid';
+                  if (style === 'none') return undefined;
+                  return {
+                    style,
+                    width: b.width * 2.83465,
+                    color: colorrefToHex(b.color)
+                  };
+                };
                 cell.borderTop = mapBorder(borderFill.borders.top);
                 cell.borderBottom = mapBorder(borderFill.borders.bottom);
                 cell.borderLeft = mapBorder(borderFill.borders.left);
@@ -1399,36 +1610,78 @@ function parseSectionData(
         break;
 
       case HWP_TAGS.HWPTAG_SHAPE_COMPONENT:
-        if (ctx.pendingImage && recordData.length >= 24) {
-          const w = readInt32(recordData, 16);
-          const h = readInt32(recordData, 20);
+        if (ctx.pendingImage && recordData.length >= 36) {
+          // SHAPE_COMPONENT layout: ShapeID(4) + ComponentID(4) + ...
+          // Width at offset 28, Height at offset 32 (verified empirically)
+          const w = readInt32(recordData, 28);
+          const h = readInt32(recordData, 32);
           if (w > 0) ctx.pendingImage.width = w / 7200 * 72;
           if (h > 0) ctx.pendingImage.height = h / 7200 * 72;
         }
         break;
 
        case HWP_TAGS.HWPTAG_SHAPE_COMPONENT_PICTURE:
-        if (recordData.length >= 73) {
-          const binItemId = readUint16(recordData, 71);
-          const idStr = `BIN${String(binItemId).padStart(4, '0')}`;
-          const existingImage = images.get(idStr);
+        if (recordData.length >= 45) {
+          // Try multiple known offsets for binItemId (2-byte uint16)
+          const _picOffsets = [71, 43, 45, 67, 69];
+          let binItemId = 0;
+          let idStr = '';
+          // Try primary offset first, then fallbacks
+          for (const off of _picOffsets) {
+            if (recordData.length >= off + 2) {
+              const candidate = readUint16(recordData, off);
+              if (candidate > 0) {
+                const candidateStr = `BIN${String(candidate).padStart(4, '0')}`;
+                if (images.has(candidateStr)) {
+                  binItemId = candidate;
+                  idStr = candidateStr;
+                  break;
+                }
+              }
+            }
+          }
+          // Final fallback: scan backwards for any valid binItemId in the images map
+          if (!idStr) {
+            for (let off = recordData.length - 2; off >= 0; off -= 2) {
+              const candidate = readUint16(recordData, off);
+              if (candidate > 0) {
+                const candidateStr = `BIN${String(candidate).padStart(4, '0')}`;
+                if (images.has(candidateStr)) {
+                  binItemId = candidate;
+                  idStr = candidateStr;
+                  break;
+                }
+              }
+            }
+          }
+          // If still nothing found, use offset 71 or 43 as best guess
+          if (!idStr) {
+            const off = recordData.length >= 73 ? 71 : 43;
+            if (recordData.length >= off + 2) {
+              binItemId = readUint16(recordData, off);
+              idStr = `BIN${String(binItemId).padStart(4, '0')}`;
+            }
+          }
+          const existingImage = idStr ? images.get(idStr) : undefined;
           const image: HwpxImage = {
             id: generateId(),
-            binaryId: idStr,
+            binaryId: idStr || 'BIN0000',
             width: ctx.pendingImage?.width || 200,
             height: ctx.pendingImage?.height || 150,
             data: existingImage?.data,
             mimeType: existingImage?.mimeType,
           };
-          if (ctx.inTableCell) {
-            const row = ctx.currentTableRow;
-            const col = ctx.currentTableCol;
-            if (row < ctx.tableRowCount && col < ctx.tableColCount && ctx.tableCells[row]?.[col]) {
-              if (!ctx.tableCells[row][col].elements) ctx.tableCells[row][col].elements = [];
-              ctx.tableCells[row][col].elements!.push({ type: 'image', data: image });
+          // Emit images at section level to match HWPX behavior.
+          // HWPX puts floating images (textWrap=topAndBottom etc.) at section level
+          // even when they're anchored to a paragraph inside a table cell.
+          // When inside a table, defer emission so images appear AFTER their
+          // containing table in the element list (matching HWPX ordering).
+          if (!ctx.inHeaderFooter && !ctx.inFootnoteEndnote) {
+            if (ctx.currentTable || tableStack.length > 0) {
+              ctx.pendingSectionImages.push(image);
+            } else {
+              section.elements.push({ type: 'image', data: image });
             }
-          } else if (!ctx.inHeaderFooter && !ctx.inFootnoteEndnote) {
-            section.elements.push({ type: 'image', data: image });
           }
           ctx.pendingImage = null;
         }

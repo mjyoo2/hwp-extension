@@ -45,11 +45,40 @@ export class HwpxEditorProvider implements vscode.CustomEditorProvider<HwpxDocum
     webviewPanel.webview.html = getWebviewContent(webviewPanel.webview, this.context.extensionUri);
 
     const updateWebview = async () => {
-      const content = document.getSerializableContent();
+      const content = document.getSerializableContent() as any;
+
+      // Always strip inline image data from sections to avoid
+      // RangeError: Invalid string length in postMessage's JSON.stringify
+      const imageDataMap: Record<string, string> = {};
+      let imgCounter = 0;
+      const strippedSections = content.sections.map((section: any) => ({
+        ...section,
+        elements: section.elements.map((el: any) => {
+          if (el.type === 'image' && el.data?.data && typeof el.data.data === 'string' && el.data.data.startsWith('data:')) {
+            const id = `img_${imgCounter++}`;
+            imageDataMap[id] = el.data.data;
+            return { ...el, data: { ...el.data, data: `__deferred:${id}` } };
+          }
+          return el;
+        }),
+      }));
+
+      // Send structure without inline images
       webviewPanel.webview.postMessage({
         type: 'update',
-        content: content,
+        content: { ...content, sections: strippedSections },
       });
+
+      // Send images in small batches
+      const entries = Object.entries(imageDataMap);
+      const BATCH = 3;
+      for (let i = 0; i < entries.length; i += BATCH) {
+        const batch = Object.fromEntries(entries.slice(i, i + BATCH));
+        webviewPanel.webview.postMessage({
+          type: 'updateImages',
+          imageData: batch,
+        });
+      }
     };
 
     const fireDocumentChange = () => {

@@ -717,8 +717,8 @@ export class HwpDocument implements vscode.CustomDocument {
       if (!result) break;
       
       const { tagId, size, nextOffset } = result;
-      const recordData = data.slice(nextOffset, nextOffset + size);
-      
+      const recordData = data.subarray(nextOffset, nextOffset + size);
+
       if (tagId === HWP_TAGS.HWPTAG_BIN_DATA && recordData.length >= 2) {
         const props = readUint16(recordData, 0);
         const type = props & 0x0F;
@@ -1554,8 +1554,8 @@ export class HwpDocument implements vscode.CustomDocument {
       if (!result) break;
       
       const { tagId, level, size, nextOffset } = result;
-      const recordData = data.slice(nextOffset, nextOffset + size);
-      
+      const recordData = data.subarray(nextOffset, nextOffset + size);
+
       if (level < prevLevel) {
         this.finalizeNestedContext(ctx, section, prevLevel - level);
       }
@@ -1845,27 +1845,27 @@ export class HwpDocument implements vscode.CustomDocument {
 
   private handleParaText(ctx: ParseContext, data: Uint8Array): void {
     if (!ctx.currentParagraph) return;
-    
+
     let currentStart = 0;
-    let currentText = '';
+    const charCodes: number[] = [];
     let charIndex = 0;
     let i = 0;
-    
+
     while (i < data.length - 1) {
       const charCode = readUint16(data, i);
       i += 2;
-      
+
       if (charCode === 0) {
         charIndex++;
         continue;
       }
-      
+
       if (charCode < 32) {
-        if (currentText) {
-          ctx.pendingTextSegments.push({ start: currentStart, end: charIndex, text: currentText });
-          currentText = '';
+        if (charCodes.length > 0) {
+          ctx.pendingTextSegments.push({ start: currentStart, end: charIndex, text: String.fromCharCode.apply(null, charCodes) });
+          charCodes.length = 0;
         }
-        
+
          if (charCode === CTRL_CHAR.LINE_BREAK) {
            ctx.pendingTextSegments.push({ start: charIndex, end: charIndex + 1, text: '\n' });
            charIndex++;
@@ -1890,13 +1890,13 @@ export class HwpDocument implements vscode.CustomDocument {
          currentStart = charIndex;
          continue;
       }
-      
-      currentText += String.fromCharCode(charCode);
+
+      charCodes.push(charCode);
       charIndex++;
     }
-    
-    if (currentText) {
-      ctx.pendingTextSegments.push({ start: currentStart, end: charIndex, text: currentText });
+
+    if (charCodes.length > 0) {
+      ctx.pendingTextSegments.push({ start: currentStart, end: charIndex, text: String.fromCharCode.apply(null, charCodes) });
     }
   }
 
@@ -3341,6 +3341,7 @@ function parseHwpContent(data: Uint8Array): HwpxContent {
   const faceNames = new Map<number, ParsedFaceName>();
   const charShapes = new Map<number, ParsedCharShape>();
   const paraShapes = new Map<number, ParsedParaShape>();
+  const borderFills = new Map<number, ParsedBorderFill>();
   
   let docInfoData = getEntryData('/DocInfo');
   if (docInfoData) {
@@ -3349,6 +3350,7 @@ function parseHwpContent(data: Uint8Array): HwpxContent {
     let faceNameId = 0;
     let charShapeId = 0;
     let paraShapeId = 0;
+    let borderFillId = 1;
     
     while (offset < docInfoData.length) {
       if (offset + 4 > docInfoData.length) break;
@@ -3404,8 +3406,14 @@ function parseHwpContent(data: Uint8Array): HwpxContent {
           paraShapes.set(paraShapeId, paraShape);
         }
         paraShapeId++;
+      } else if (tagId === HWP_TAGS.HWPTAG_BORDER_FILL && recordData.length >= 32) {
+        const borderFill = parseBorderFillForContent(recordData);
+        if (borderFill) {
+          borderFills.set(borderFillId, borderFill);
+        }
+        borderFillId++;
       }
-      
+
       offset = nextOffset + size;
     }
   }
@@ -3447,7 +3455,7 @@ function parseHwpContent(data: Uint8Array): HwpxContent {
   while (true) {
     const sectionData = getEntryData(`/BodyText/Section${sectionIndex}`);
     if (!sectionData) break;
-    content.sections.push(parseSectionData(sectionData, content.images, faceNames, charShapes, paraShapes));
+    content.sections.push(parseSectionData(sectionData, content.images, faceNames, charShapes, paraShapes, borderFills));
     sectionIndex++;
   }
   
@@ -3585,6 +3593,15 @@ function parseSectionData(
       }
     }
     
+    // Resolve borderFillId to actual border/background values
+    const borderWidthMm = [0.1, 0.12, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0];
+    const borderStyleMap: Record<number, string> = { 0: 'none', 1: 'solid', 2: 'dashed', 3: 'dotted', 4: 'dashed', 5: 'dashed', 6: 'dashed', 7: 'dotted', 8: 'double', 255: 'none' };
+    const mapBorderLocal = (b: { type: number; width: number; color: number }) => {
+      const style = borderStyleMap[b.type] ?? 'solid';
+      if (style === 'none') return undefined;
+      return { style, width: b.width * 2.83465, color: colorrefToHex(b.color) };
+    };
+
     const rows: TableRow[] = [];
     for (let r = 0; r < ctx.tableRowCount; r++) {
       const cells: TableCell[] = [];
@@ -3592,6 +3609,29 @@ function parseSectionData(
         if (coveredCells.has(`${r},${c}`)) continue;
         const cell = ctx.tableCells[r]?.[c];
         if (cell) {
+          // Resolve borderFillId to border/background properties
+          if (cell.borderFillId && ctx.borderFills) {
+            const bf = ctx.borderFills.get(cell.borderFillId);
+            if (bf) {
+              const fill = bf.fill as any;
+              if (fill?.fillType === 'solid' && fill.backgroundColor !== undefined) {
+                cell.backgroundColor = colorrefToHex(fill.backgroundColor);
+              } else if (fill?.fillType === 'gradient' && fill.colors?.length > 0) {
+                const gradTypeMap: Record<number, string> = { 1: 'Linear', 2: 'Radial', 3: 'Conical', 4: 'Square' };
+                cell.backgroundGradation = {
+                  type: (gradTypeMap[fill.gradientType] || 'Linear') as any,
+                  angle: fill.angle || 0,
+                  colors: fill.colors.map((c: any) => colorrefToHex(c.color)),
+                };
+              }
+              if (bf.borders) {
+                cell.borderTop = mapBorderLocal(bf.borders.top);
+                cell.borderBottom = mapBorderLocal(bf.borders.bottom);
+                cell.borderLeft = mapBorderLocal(bf.borders.left);
+                cell.borderRight = mapBorderLocal(bf.borders.right);
+              }
+            }
+          }
           if (cell.paragraphs.length === 0) cell.paragraphs.push({ id: generateId(), runs: [{ text: '' }] });
           cells.push(cell);
         }
@@ -3650,9 +3690,9 @@ function parseSectionData(
     }
     
      prevLevel = level;
-     
-      const recordData = data.slice(nextOffset, nextOffset + size);
-     
+
+      const recordData = data.subarray(nextOffset, nextOffset + size);
+
         // Check if we exited header/footer scope based on level
         if (ctx.inHeaderFooter && headerFooterLevel >= 0 && level <= headerFooterLevel) {
           ctx.inHeaderFooter = false;
@@ -3744,25 +3784,25 @@ function parseSectionData(
        case HWP_TAGS.HWPTAG_PARA_TEXT:
           if (ctx.currentParagraph) {
             let currentStart = 0;
-            let currentText = '';
+            const charCodes: number[] = [];
             let charIndex = 0;
             let i = 0;
-            
+
             while (i < recordData.length - 1) {
               const charCode = readUint16(recordData, i);
               i += 2;
-              
+
               if (charCode === 0) {
                 charIndex++;
                 continue;
               }
-              
+
               if (charCode < 32) {
-                if (currentText) {
-                  ctx.pendingTextSegments.push({ start: currentStart, end: charIndex, text: currentText });
-                  currentText = '';
+                if (charCodes.length > 0) {
+                  ctx.pendingTextSegments.push({ start: currentStart, end: charIndex, text: String.fromCharCode.apply(null, charCodes) });
+                  charCodes.length = 0;
                 }
-                
+
                  if (charCode === CTRL_CHAR.LINE_BREAK) {
                    ctx.pendingTextSegments.push({ start: charIndex, end: charIndex + 1, text: '\n' });
                    charIndex++;
@@ -3787,13 +3827,13 @@ function parseSectionData(
                 currentStart = charIndex;
                 continue;
               }
-              
-              currentText += String.fromCharCode(charCode);
+
+              charCodes.push(charCode);
               charIndex++;
             }
-            
-            if (currentText) {
-              ctx.pendingTextSegments.push({ start: currentStart, end: charIndex, text: currentText });
+
+            if (charCodes.length > 0) {
+              ctx.pendingTextSegments.push({ start: currentStart, end: charIndex, text: String.fromCharCode.apply(null, charCodes) });
             }
           }
           break;
@@ -4037,6 +4077,97 @@ function parseSectionData(
   }
   
   return section;
+}
+
+function parseBorderFillForContent(data: Uint8Array): ParsedBorderFill | null {
+  if (data.length < 32) return null;
+
+  const props = readUint16(data, 0);
+  const effect3d = (props & 0x01) !== 0;
+  const shadow = (props & 0x02) !== 0;
+  const slashDiagonal = (props >> 2) & 0x07;
+  const backslashDiagonal = (props >> 5) & 0x07;
+
+  const borderTypes = [data[2], data[3], data[4], data[5]];
+  const borderWidths = [data[6], data[7], data[8], data[9]];
+  const borderColors = [
+    readUint32(data, 10), readUint32(data, 14),
+    readUint32(data, 18), readUint32(data, 22),
+  ];
+
+  const borderWidthMm = [0.1, 0.12, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0];
+
+  const result: ParsedBorderFill = {
+    effect3d,
+    shadow,
+    slashDiagonal,
+    backslashDiagonal,
+    borders: {
+      left: { type: borderTypes[0], width: borderWidthMm[borderWidths[0]] ?? 0.1, color: borderColors[0] },
+      right: { type: borderTypes[1], width: borderWidthMm[borderWidths[1]] ?? 0.1, color: borderColors[1] },
+      top: { type: borderTypes[2], width: borderWidthMm[borderWidths[2]] ?? 0.1, color: borderColors[2] },
+      bottom: { type: borderTypes[3], width: borderWidthMm[borderWidths[3]] ?? 0.1, color: borderColors[3] },
+    },
+  };
+
+  const diagonalType = data[26];
+  if (diagonalType !== 0) {
+    result.diagonal = { type: diagonalType, width: borderWidthMm[data[27]] ?? 0.1, color: readUint32(data, 28) };
+  }
+
+  if (data.length >= 36) {
+    const fillType = readUint32(data, 32);
+    let fillOffset = 36;
+
+    if (fillType & 0x01) {
+      if (data.length >= fillOffset + 12) {
+        result.fill = {
+          fillType: 'solid',
+          backgroundColor: readUint32(data, fillOffset),
+          patternColor: readUint32(data, fillOffset + 4),
+          patternType: readInt32(data, fillOffset + 8),
+        };
+        fillOffset += 12;
+      }
+    } else if (fillType & 0x04) {
+      if (data.length >= fillOffset + 12) {
+        const gradientType = readInt16(data, fillOffset);
+        const angle = readInt16(data, fillOffset + 2);
+        const centerX = readInt16(data, fillOffset + 4);
+        const centerY = readInt16(data, fillOffset + 6);
+        const blur = readInt16(data, fillOffset + 8);
+        const numColors = readInt16(data, fillOffset + 10);
+        fillOffset += 12;
+
+        const colors: Array<{ position?: number; color: number }> = [];
+        const positionsCount = Math.max(0, numColors - 2);
+        fillOffset += positionsCount * 4;
+
+        for (let i = 0; i < numColors && fillOffset + 4 <= data.length; i++) {
+          colors.push({ color: readUint32(data, fillOffset) });
+          fillOffset += 4;
+        }
+
+        result.fill = {
+          fillType: 'gradient',
+          gradientType, angle, centerX, centerY, blur, colors,
+        };
+      }
+    } else if (fillType & 0x02) {
+      if (data.length >= fillOffset + 6) {
+        result.fill = {
+          fillType: 'image',
+          imageType: data[fillOffset],
+          brightness: data[fillOffset + 1],
+          contrast: data[fillOffset + 2],
+          effect: data[fillOffset + 3],
+          binItemId: readUint16(data, fillOffset + 4),
+        };
+      }
+    }
+  }
+
+  return result;
 }
 
 function parseFaceNameStandalone(data: Uint8Array): ParsedFaceName | null {

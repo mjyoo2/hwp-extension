@@ -15,7 +15,7 @@ import {
 
 type DocumentFormat = 'hwpx' | 'hwp';
 
-const MAX_UNDO_STACK_SIZE = 50;
+const MAX_UNDO_STACK_SIZE = 30;
 
 export class HwpxDocument implements vscode.CustomDocument {
   private _uri: vscode.Uri;
@@ -28,6 +28,7 @@ export class HwpxDocument implements vscode.CustomDocument {
   private _redoStack: string[] = [];
   private _onDidChangeContent = new vscode.EventEmitter<void>();
   public readonly onDidChangeContent = this._onDidChangeContent.event;
+  private _sentImageKeys: Set<string> = new Set();
 
   private constructor(uri: vscode.Uri, zip: JSZip | null, content: HwpxContent, format: DocumentFormat) {
     this._uri = uri;
@@ -64,14 +65,21 @@ export class HwpxDocument implements vscode.CustomDocument {
 
   getSerializableContent(): object {
     const content = this._content;
+    // Only send images whose keys have not been sent before (image caching)
+    const newImages = Array.from(content.images.entries()).filter(([key]) => !this._sentImageKeys.has(key));
+    newImages.forEach(([key]) => this._sentImageKeys.add(key));
     return {
       metadata: content.metadata,
       sections: content.sections,
-      images: Array.from(content.images.entries()),
+      images: newImages,
       footnotes: content.footnotes,
       endnotes: content.endnotes,
       isReadOnly: this._format === 'hwp',
     };
+  }
+
+  resetImageCache(): void {
+    this._sentImageKeys.clear();
   }
 
   private findParagraphByPath(
@@ -97,7 +105,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     if (!paragraph) return;
 
     if (paragraph.runs[runIndex]) {
-      this.saveState();
+      this.saveState(sectionIndex);
       paragraph.runs[runIndex].text = text;
       this._isDirty = true;
     }
@@ -111,7 +119,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     const paragraph = this.findParagraphByPath(sectionIndex, elementIndex);
     if (!paragraph) return;
 
-    this.saveState();
+    this.saveState(sectionIndex);
     paragraph.runs = runs;
     this._isDirty = true;
   }
@@ -125,7 +133,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     const paragraph = this.findParagraphByPath(sectionIndex, elementIndex);
     if (!paragraph || !paragraph.runs[runIndex]) return;
 
-    this.saveState();
+    this.saveState(sectionIndex);
     const run = paragraph.runs[runIndex];
     run.charStyle = { ...run.charStyle, ...style };
     this._isDirty = true;
@@ -139,7 +147,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     const paragraph = this.findParagraphByPath(sectionIndex, elementIndex);
     if (!paragraph) return;
 
-    this.saveState();
+    this.saveState(sectionIndex);
     paragraph.paraStyle = { ...paragraph.paraStyle, ...style };
     this._isDirty = true;
   }
@@ -152,7 +160,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     const paragraph = this.findParagraphByPath(sectionIndex, elementIndex);
     if (!paragraph) return;
 
-    this.saveState();
+    this.saveState(sectionIndex);
     if (outlineLevel >= 1 && outlineLevel <= 7) {
       paragraph.outlineLevel = outlineLevel;
     } else {
@@ -165,7 +173,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     const section = this._content.sections[sectionIndex];
     if (!section) return;
 
-    this.saveState();
+    this.saveState(sectionIndex);
     if (!section.columnDef) {
       section.columnDef = {};
     }
@@ -186,7 +194,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     const element = section.elements[elementIndex];
     if (!element) return;
 
-    this.saveState();
+    this.saveState(sectionIndex);
     if (element.type === 'table' || element.type === 'image') {
       (element.data as { caption?: string; captionPosition?: string }).caption = caption;
       (element.data as { caption?: string; captionPosition?: string }).captionPosition = captionPosition;
@@ -198,7 +206,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     const section = this._content.sections[sectionIndex];
     if (!section) return;
 
-    this.saveState();
+    this.saveState(sectionIndex);
     const newParagraph: HwpxParagraph = {
       id: Math.random().toString(36).substring(2, 11),
       runs: [{ text: '' }],
@@ -213,7 +221,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     const section = this._content.sections[sectionIndex];
     if (!section) return;
 
-    this.saveState();
+    this.saveState(sectionIndex);
     section.elements.splice(elementIndex, 1);
     this._isDirty = true;
   }
@@ -227,7 +235,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     if (!currentElement || !previousElement) return;
     if (currentElement.type !== 'paragraph' || previousElement.type !== 'paragraph') return;
 
-    this.saveState();
+    this.saveState(sectionIndex);
     const currentParagraph = currentElement.data as HwpxParagraph;
     const previousParagraph = previousElement.data as HwpxParagraph;
 
@@ -257,7 +265,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     const paragraph = cell.paragraphs[paragraphIndex];
     if (!paragraph) return;
 
-    this.saveState();
+    this.saveState(sectionIndex);
     if (paragraph.runs.length > 0) {
       paragraph.runs[0].text = text;
     } else {
@@ -277,7 +285,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     const templateRow = table.rows[afterRowIndex];
     if (!templateRow) return;
 
-    this.saveState();
+    this.saveState(sectionIndex);
     const newRow = {
       cells: templateRow.cells.map(() => ({
         paragraphs: [{
@@ -300,7 +308,7 @@ export class HwpxDocument implements vscode.CustomDocument {
 
     const table = element.data as HwpxTable;
     if (table.rows.length > 1) {
-      this.saveState();
+      this.saveState(sectionIndex);
       table.rows.splice(rowIndex, 1);
       this._isDirty = true;
     }
@@ -315,7 +323,7 @@ export class HwpxDocument implements vscode.CustomDocument {
 
     const table = element.data as HwpxTable;
     
-    this.saveState();
+    this.saveState(sectionIndex);
     
     if (!table.columnWidths) {
       const colCount = table.colCount || table.colCnt || table.rows[0]?.cells.length || 0;
@@ -346,7 +354,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     
     if (rowIndex < 0 || rowIndex >= table.rows.length) return;
     
-    this.saveState();
+    this.saveState(sectionIndex);
     
     table.rows[rowIndex].height = height;
     
@@ -366,7 +374,7 @@ export class HwpxDocument implements vscode.CustomDocument {
 
     const table = element.data as HwpxTable;
     
-    this.saveState();
+    this.saveState(sectionIndex);
     
     const insertPos = insertLeft ? colIndex : colIndex + 1;
     const defaultWidth = table.columnWidths?.[colIndex] || 100;
@@ -404,7 +412,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     
     if (colCount <= 1) return;
     
-    this.saveState();
+    this.saveState(sectionIndex);
     
     if (table.columnWidths && table.columnWidths.length > colIndex) {
       table.columnWidths.splice(colIndex, 1);
@@ -441,7 +449,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     if (startRow < 0 || endRow >= table.rows.length) return;
     if (startCol < 0 || endCol >= (table.rows[0]?.cells.length || 0)) return;
     
-    this.saveState();
+    this.saveState(sectionIndex);
     
     const mainCell = table.rows[startRow].cells[startCol];
     mainCell.rowSpan = endRow - startRow + 1;
@@ -562,8 +570,8 @@ export class HwpxDocument implements vscode.CustomDocument {
     };
   }
 
-  private saveState(): void {
-    const state = this.serializeContent();
+  private saveState(sectionIndex?: number): void {
+    const state = this.serializeContent(sectionIndex);
     this._undoStack.push(state);
     if (this._undoStack.length > MAX_UNDO_STACK_SIZE) {
       this._undoStack.shift();
@@ -571,17 +579,31 @@ export class HwpxDocument implements vscode.CustomDocument {
     this._redoStack = [];
   }
 
-  private serializeContent(): string {
+  private serializeContent(sectionIndex?: number): string {
+    if (sectionIndex !== undefined && this._content.sections[sectionIndex] !== undefined) {
+      return JSON.stringify({
+        type: 'partial',
+        sectionIndex,
+        sectionData: structuredClone(this._content.sections[sectionIndex]),
+        metadata: structuredClone(this._content.metadata),
+      });
+    }
     return JSON.stringify({
-      sections: this._content.sections,
-      metadata: this._content.metadata,
+      type: 'full',
+      sections: structuredClone(this._content.sections),
+      metadata: structuredClone(this._content.metadata),
     });
   }
 
   private deserializeContent(state: string): void {
     const parsed = JSON.parse(state);
-    this._content.sections = parsed.sections;
-    this._content.metadata = parsed.metadata;
+    if (parsed.type === 'partial') {
+      this._content.sections[parsed.sectionIndex] = parsed.sectionData;
+      this._content.metadata = parsed.metadata;
+    } else {
+      this._content.sections = parsed.sections;
+      this._content.metadata = parsed.metadata;
+    }
   }
 
   canUndo(): boolean {

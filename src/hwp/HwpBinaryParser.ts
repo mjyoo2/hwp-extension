@@ -152,6 +152,8 @@ export class HwpBinaryParser {
   private paraShapes: ParaShape[] = [];
   private borderFills: BorderFill[] = [];
   private binDataItems: Map<string, BinData> = new Map();
+  private binStreamNames: Map<string, string> = new Map(); // binId -> stream name
+  private binDataCache: Map<string, BinData> = new Map();
 
   static parse(data: Uint8Array): HwpxContent {
     const parser = new HwpBinaryParser(data);
@@ -228,26 +230,39 @@ export class HwpBinaryParser {
 
   private parseBinData(): void {
     const streams = this.ole.listStreams();
-    
+
     for (const stream of streams) {
       if (stream.name.startsWith('BIN') && stream.type === 'stream') {
         const match = stream.name.match(/BIN(\d+)/i);
         if (match) {
           const binId = match[1];
-          const rawData = this.ole.readStreamByName(stream.name);
-          if (rawData) {
-            const decompressed = this.decompressStream(rawData);
-            const base64Data = this.uint8ArrayToBase64(decompressed);
-            this.binDataItems.set(binId, {
-              id: binId,
-              size: decompressed.length,
-              encoding: 'Base64',
-              data: base64Data,
-            });
-          }
+          this.binStreamNames.set(binId, stream.name);
         }
       }
     }
+  }
+
+  public getBinData(name: string): BinData | undefined {
+    if (this.binDataCache.has(name)) {
+      return this.binDataCache.get(name);
+    }
+    const streamName = this.binStreamNames.get(name);
+    if (!streamName) return undefined;
+
+    const rawData = this.ole.readStreamByName(streamName);
+    if (!rawData) return undefined;
+
+    const decompressed = this.decompressStream(rawData);
+    const base64Data = this.uint8ArrayToBase64(decompressed);
+    const item: BinData = {
+      id: name,
+      size: decompressed.length,
+      encoding: 'Base64',
+      data: base64Data,
+    };
+    this.binDataCache.set(name, item);
+    this.binDataItems.set(name, item);
+    return item;
   }
 
   private parseRecords(data: Uint8Array, handler: (header: RecordHeader, data: Uint8Array) => void): void {
@@ -272,7 +287,7 @@ export class HwpBinaryParser {
 
       if (offset + size > data.length) break;
 
-      const recordData = data.slice(offset, offset + size);
+      const recordData = data.subarray(offset, offset + size);
       handler({ tagId, level, size }, recordData);
 
       offset += size;
@@ -301,12 +316,7 @@ export class HwpBinaryParser {
     const flags = view.getUint8(0);
     const nameLength = view.getUint16(1, true);
     
-    let name = '';
-    for (let i = 0; i < nameLength; i++) {
-      const charCode = view.getUint16(3 + i * 2, true);
-      if (charCode === 0) break;
-      name += String.fromCharCode(charCode);
-    }
+    const name = new TextDecoder('utf-16le').decode(data.subarray(3, 3 + nameLength * 2)).replace(/\0.*$/, '');
 
     this.fontFaces.push({
       name,
@@ -620,6 +630,7 @@ export class HwpBinaryParser {
         }
         
         let backgroundColor: string | undefined;
+        let backgroundGradation: { type: import('../hwpx/types').GradationType; angle: number; colors: string[] } | undefined;
         let borderTop: { width: number; style: string; color: string } | undefined;
         let borderBottom: { width: number; style: string; color: string } | undefined;
         let borderLeft: { width: number; style: string; color: string } | undefined;
@@ -628,22 +639,35 @@ export class HwpBinaryParser {
         const borderFillId = currentTableCtx.currentCellBorderFillId;
         if (borderFillId > 0 && borderFillId <= this.borderFills.length) {
           const borderFill = this.borderFills[borderFillId - 1];
-          if (borderFill?.fill?.backgroundColor !== undefined) {
-            backgroundColor = this.colorToHex(borderFill.fill.backgroundColor);
+          if (borderFill?.fill) {
+            if (borderFill.fill.fillType === 'solid' && borderFill.fill.backgroundColor !== undefined) {
+              backgroundColor = this.colorToHex(borderFill.fill.backgroundColor);
+            } else if (borderFill.fill.fillType === 'gradient' && borderFill.fill.colors && borderFill.fill.colors.length > 0) {
+              const gradTypeMap: Record<number, import('../hwpx/types').GradationType> = {
+                1: 'Linear', 2: 'Radial', 3: 'Conical', 4: 'Square',
+              };
+              backgroundGradation = {
+                type: gradTypeMap[borderFill.fill.gradientType] || 'Linear',
+                angle: borderFill.fill.angle || 0,
+                colors: borderFill.fill.colors.map((c: { color: number }) => this.colorToHex(c.color)),
+              };
+            }
           }
           if (borderFill?.borders) {
             const borderWidthMap = [0.1, 0.12, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0];
             const borderStyleMap: Record<number, string> = {
-              0: 'solid', 1: 'dashed', 2: 'dotted', 3: 'dash-dot', 4: 'dash-dot-dot',
-              5: 'dashed', 6: 'dotted', 7: 'double', 8: 'double', 9: 'double', 10: 'double',
-              11: 'wavy', 12: 'wavy', 13: 'solid', 14: 'solid', 15: 'solid', 16: 'solid',
+              0: 'none', 1: 'solid', 2: 'dashed', 3: 'dotted', 4: 'dash-dot', 5: 'dash-dot-dot',
+              6: 'dashed', 7: 'dotted', 8: 'double', 9: 'double', 10: 'double', 11: 'double',
+              12: 'wavy', 13: 'wavy', 14: 'solid', 15: 'solid', 16: 'solid', 17: 'solid',
             };
             const mapBorder = (b: BorderLine) => {
+              const style = borderStyleMap[b.type] ?? 'solid';
+              if (style === 'none') return undefined;
               const widthMm = borderWidthMap[b.width] ?? (b.width + 1) * 0.1;
               const widthPt = widthMm * 2.8346;
               return {
                 width: widthPt,
-                style: borderStyleMap[b.type] || 'solid',
+                style,
                 color: this.colorToHex(b.color),
               };
             };
@@ -670,6 +694,7 @@ export class HwpBinaryParser {
             marginTop: currentTableCtx.currentCellMarginTop,
             marginBottom: currentTableCtx.currentCellMarginBottom,
             backgroundColor,
+            backgroundGradation,
             borderTop,
             borderBottom,
             borderLeft,
@@ -980,17 +1005,17 @@ export class HwpBinaryParser {
 
   private parseParaText(data: Uint8Array): string {
     const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    let text = '';
+    const codes: number[] = [];
     let i = 0;
-    
+
     while (i < data.length) {
       const charCode = view.getUint16(i, true);
-      
+
       if (charCode === 0) break;
-      
+
       if (charCode < 32) {
         i += 2;
-        
+
         switch (charCode) {
           case 1: i += 14; break;
           case 2: i += 14; break;
@@ -1005,20 +1030,20 @@ export class HwpBinaryParser {
           case 21: i += 14; break;
           case 22: i += 14; break;
           case 23: i += 14; break;
-          case 9: text += '\t'; break;
-          case 10: text += '\n'; break;
+          case 9: codes.push(9); break;
+          case 10: codes.push(10); break;
           case 13: break;
           case 24: i += 2; break;
           default: break;
         }
         continue;
       }
-      
-      text += String.fromCharCode(charCode);
+
+      codes.push(charCode);
       i += 2;
     }
-    
-    return text;
+
+    return String.fromCharCode.apply(null, codes);
   }
 
   private parseParaCharShape(data: Uint8Array): { pos: number; shapeIndex: number }[] {
@@ -1146,11 +1171,13 @@ export class HwpBinaryParser {
   }
 
   private uint8ArrayToBase64(data: Uint8Array): string {
-    let binary = '';
-    for (let i = 0; i < data.length; i++) {
-      binary += String.fromCharCode(data[i]);
+    const chunks: string[] = [];
+    const chunkSize = 32768;
+    for (let i = 0; i < data.length; i += chunkSize) {
+      const chunk = data.subarray(i, Math.min(i + chunkSize, data.length));
+      chunks.push(String.fromCharCode.apply(null, Array.from(chunk)));
     }
-    return btoa(binary);
+    return btoa(chunks.join(''));
   }
 
   public toHwpxContent(): HwpxContent {

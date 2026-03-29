@@ -31,6 +31,7 @@ export class OleReader {
   private fat: number[] = [];
   private miniFat: number[] = [];
   private directoryEntries: DirectoryEntry[] = [];
+  private directoryMap: Map<string, DirectoryEntry> = new Map();
   private miniStreamData: Uint8Array = new Uint8Array(0);
 
   constructor(buffer: Uint8Array) {
@@ -107,15 +108,18 @@ export class OleReader {
       difatSector = this.data.getInt32(offset + entriesPerSector * 4, true);
     }
 
-    this.fat = [];
+    const totalEntries = difat.length * (this.sectorSize / 4);
+    this.fat = new Array(totalEntries);
+    let fatIdx = 0;
     for (const fatSector of difat) {
       const offset = this.getSectorOffset(fatSector);
       const entriesPerSector = this.sectorSize / 4;
-      
+
       for (let i = 0; i < entriesPerSector; i++) {
-        this.fat.push(this.data.getInt32(offset + i * 4, true));
+        this.fat[fatIdx++] = this.data.getInt32(offset + i * 4, true);
       }
     }
+    this.fat.length = fatIdx;
   }
 
   private readDirectoryEntries(): void {
@@ -125,14 +129,16 @@ export class OleReader {
     const dirSectors = this.getSectorChain(firstDirSector);
     
     this.directoryEntries = [];
+    this.directoryMap = new Map();
     for (const sector of dirSectors) {
       const offset = this.getSectorOffset(sector);
-      
+
       for (let i = 0; i < entriesPerSector; i++) {
         const entryOffset = offset + i * 128;
         const entry = this.readDirectoryEntry(entryOffset);
         if (entry.type !== 0) {
           this.directoryEntries.push(entry);
+          this.directoryMap.set(entry.name.toLowerCase(), entry);
         }
       }
     }
@@ -237,10 +243,7 @@ export class OleReader {
       for (const sector of chain) {
         const miniOffset = sector * this.miniSectorSize;
         const bytesToCopy = Math.min(this.miniSectorSize, size - offset);
-        
-        for (let i = 0; i < bytesToCopy; i++) {
-          result[offset + i] = this.miniStreamData[miniOffset + i];
-        }
+        result.set(this.miniStreamData.subarray(miniOffset, miniOffset + bytesToCopy), offset);
         offset += bytesToCopy;
       }
     } else {
@@ -248,10 +251,7 @@ export class OleReader {
       for (const sector of chain) {
         const sectorOffset = this.getSectorOffset(sector);
         const bytesToCopy = Math.min(this.sectorSize, size - offset);
-        
-        for (let i = 0; i < bytesToCopy; i++) {
-          result[offset + i] = this.data.getUint8(sectorOffset + i);
-        }
+        result.set(new Uint8Array(this.data.buffer, this.data.byteOffset + sectorOffset, bytesToCopy), offset);
         offset += bytesToCopy;
       }
     }
@@ -292,15 +292,11 @@ export class OleReader {
       return null;
     }
 
-    const entry = this.directoryEntries.find((e, idx) => {
-      return e.name.toLowerCase() === name.toLowerCase();
-    });
-
-    return entry || null;
+    return this.directoryMap.get(name.toLowerCase()) || null;
   }
 
   public readStreamByName(name: string): Uint8Array | null {
-    const entry = this.directoryEntries.find(e => e.name === name);
+    const entry = this.directoryMap.get(name.toLowerCase());
     if (!entry || entry.type !== 2) {
       return null;
     }
