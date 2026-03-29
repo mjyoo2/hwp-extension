@@ -2,6 +2,19 @@
 
 All notable changes to "HWPX Editor" extension will be documented in this file.
 
+## [0.3.0] - 2026-03-29
+
+### Fixed
+- 테이블 배경색 및 테두리선 렌더링 오류 수정
+- 이미지 레이아웃 오류 수정
+
+### Improved
+- HWP 바이너리 파서 대폭 강화 (standalone parser 개선)
+- MCP 서버에 HWP 바이너리 파일 읽기 지원 추가
+- MCP 서버 문서 조작 도구 확장 (HwpxDocument, HwpxParser)
+- Webview UI 렌더링 개선 (테이블, 이미지)
+- 미사용 코드 및 파일 정리
+
 ## [0.2.0] - 2025-02-23
 
 ### Added

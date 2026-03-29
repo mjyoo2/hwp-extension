@@ -18,6 +18,7 @@ import {
   TableCell,
   CharacterStyle,
   ParagraphStyle,
+  GradationType,
 } from './types';
 
 // ============================================================
@@ -297,6 +298,7 @@ interface ParseContext {
   inShapeText: boolean;
   shapeTextParagraphs: HwpxParagraph[];
   inEquation: boolean;
+  equationScript: string;
 }
 
 // ============================================================
@@ -862,6 +864,7 @@ function parseSectionData(
     inShapeText: false,
     shapeTextParagraphs: [],
     inEquation: false,
+    equationScript: '',
   };
 
   let offset = 0;
@@ -1572,7 +1575,7 @@ function parseSectionData(
                 const gf = fill as ParsedGradientFill;
                 const gradTypeMap: Record<number, string> = { 1: 'Linear', 2: 'Radial', 3: 'Conical', 4: 'Square' };
                 cell.backgroundGradation = {
-                  type: gradTypeMap[gf.gradientType] || 'Linear',
+                  type: (gradTypeMap[gf.gradientType] || 'Linear') as GradationType,
                   angle: gf.angle || 0,
                   colors: gf.colors.map(c => colorrefToHex(c.color)),
                 };
