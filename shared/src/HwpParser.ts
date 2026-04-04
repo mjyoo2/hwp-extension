@@ -18,7 +18,7 @@ import {
   TableCell,
   CharacterStyle,
   ParagraphStyle,
-} from '../hwpx/types';
+} from './types';
 
 // ============================================================
 // Helper Interfaces
@@ -297,6 +297,7 @@ interface ParseContext {
   inShapeText: boolean;
   shapeTextParagraphs: HwpxParagraph[];
   inEquation: boolean;
+  equationScript?: string;
 }
 
 // ============================================================
@@ -446,9 +447,13 @@ function charShapeToStyleStandalone(charShape: ParsedCharShape, faceNames: Map<n
     fontSize: charShape.baseSize / 100,
     bold: charShape.bold,
     italic: charShape.italic,
-    underline: charShape.underlineType === 1 || charShape.underlineType === 3,
+    underline: charShape.underlineType !== 0 ? {
+      type: ({ 0: 'None', 1: 'Bottom', 2: 'Center', 3: 'Top' } as Record<number, import('./types').UnderlineType>)[charShape.underlineType] || 'Bottom',
+      shape: ({ 0: 'Solid', 1: 'Dash', 2: 'Dot', 3: 'DashDot', 4: 'DashDotDot', 5: 'LongDash', 6: 'CircleDot', 7: 'DoubleSlim', 8: 'SlimThick', 9: 'ThickSlim', 10: 'SlimThickSlim' } as Record<number, import('./types').LineType2>)[charShape.underlineShape] || 'Solid',
+      color: charShape.underlineColor !== 0 ? colorrefToHex(charShape.underlineColor) : '#000000',
+    } : undefined,
     strikethrough: charShape.strikethrough >= 2,
-    fontColor: colorrefToHex(charShape.textColor),
+    fontColor: charShape.textColor !== 0 ? colorrefToHex(charShape.textColor) : undefined,
     superscript: charShape.superscript,
     subscript: charShape.subscript,
     emboss: charShape.emboss,
@@ -872,19 +877,54 @@ function parseSectionData(
   let discardCurrentParagraph = false;
   let paraTextHadInlineControls = false;
   let paraTextWasPresent = false;
+  let paraWasImageHost = false;
+  let cellParaIsImageHost = false;
+  let pendingParaImages: HwpxImage[] = [];
 
   const flushPendingTextSegments = () => {
     if (!ctx.currentParagraph || ctx.pendingTextSegments.length === 0) return;
     for (const segment of ctx.pendingTextSegments) {
-      let applicableCharShapeId = ctx.currentCharShapeId;
+      // Find all char shape boundaries within this segment and split accordingly
+      const boundaries: Array<{ pos: number; charShapeId: number }> = [];
+      let baseCharShapeId = ctx.currentCharShapeId;
       for (const pos of ctx.charShapePositions) {
         if (pos.startPos <= segment.start) {
-          applicableCharShapeId = pos.charShapeId;
+          baseCharShapeId = pos.charShapeId;
+        } else if (pos.startPos < segment.end) {
+          boundaries.push({ pos: pos.startPos, charShapeId: pos.charShapeId });
         }
       }
-      const charShape = ctx.charShapes.get(applicableCharShapeId);
-      const charStyle = charShape ? charShapeToStyleStandalone(charShape, ctx.faceNames) : undefined;
-      ctx.currentParagraph.runs.push({ text: segment.text, charStyle });
+
+      if (boundaries.length === 0) {
+        // No char shape changes within this segment - emit as single run
+        const charShape = ctx.charShapes.get(baseCharShapeId);
+        const charStyle = charShape ? charShapeToStyleStandalone(charShape, ctx.faceNames) : undefined;
+        ctx.currentParagraph.runs.push({ text: segment.text, charStyle });
+      } else {
+        // Split segment at char shape boundaries
+        let currentOffset = segment.start;
+        let currentCsId = baseCharShapeId;
+        for (const boundary of boundaries) {
+          const splitPos = boundary.pos - segment.start;
+          const prevPos = currentOffset - segment.start;
+          if (splitPos > prevPos) {
+            const text = segment.text.substring(prevPos, splitPos);
+            const charShape = ctx.charShapes.get(currentCsId);
+            const charStyle = charShape ? charShapeToStyleStandalone(charShape, ctx.faceNames) : undefined;
+            ctx.currentParagraph.runs.push({ text, charStyle });
+          }
+          currentOffset = boundary.pos;
+          currentCsId = boundary.charShapeId;
+        }
+        // Emit remaining text after last boundary
+        const remainPos = currentOffset - segment.start;
+        if (remainPos < segment.text.length) {
+          const text = segment.text.substring(remainPos);
+          const charShape = ctx.charShapes.get(currentCsId);
+          const charStyle = charShape ? charShapeToStyleStandalone(charShape, ctx.faceNames) : undefined;
+          ctx.currentParagraph.runs.push({ text, charStyle });
+        }
+      }
     }
     ctx.pendingTextSegments = [];
   };
@@ -893,6 +933,40 @@ function parseSectionData(
     if (!ctx.currentParagraph) return;
     if (discardCurrentParagraph) {
       discardCurrentParagraph = false;
+      // If there are pending images, emit an empty paragraph before them
+      // to preserve the element count (the host paragraph should still appear
+      // as an empty paragraph element in HWPX).
+      if (pendingParaImages.length > 0) {
+        const emptyCS = ctx.charShapePositions.length > 0
+          ? ctx.charShapes.get(ctx.charShapePositions[0].charShapeId)
+          : ctx.charShapes.get(ctx.currentCharShapeId);
+        const emptyStyle = emptyCS ? charShapeToStyleStandalone(emptyCS, ctx.faceNames) : undefined;
+        const emptyPara: HwpxParagraph = { id: generateId(), runs: [{ text: '', charStyle: emptyStyle }] };
+        // Apply para shape from current paragraph
+        const psShape = ctx.paraShapes.get(ctx.currentParaShapeId);
+        if (psShape) {
+          const alignMap: Record<number, 'Justify' | 'Left' | 'Right' | 'Center' | 'Distribute'> = {
+            0: 'Justify', 1: 'Left', 2: 'Right', 3: 'Center', 4: 'Distribute', 5: 'Distribute'
+          };
+          emptyPara.paraStyle = {
+            align: alignMap[psShape.alignment] || 'Justify',
+            marginLeft: hwpunitToPt(psShape.leftMargin),
+            marginRight: hwpunitToPt(psShape.rightMargin),
+            firstLineIndent: hwpunitToPt(psShape.indent),
+            marginTop: hwpunitToPt(psShape.spacingBefore),
+            marginBottom: hwpunitToPt(psShape.spacingAfter),
+            lineSpacing: psShape.lineSpacing / 100,
+            lineSpacingType: psShape.lineSpacingType === 0 ? undefined : 'fixed',
+            keepWithNext: psShape.keepWithNext,
+            keepLines: psShape.keepTogether,
+          };
+        }
+        section.elements.push({ type: 'paragraph', data: emptyPara });
+        for (const img of pendingParaImages) {
+          section.elements.push({ type: 'image', data: img });
+        }
+        pendingParaImages = [];
+      }
       ctx.currentParagraph = null;
       return;
     }
@@ -908,8 +982,12 @@ function parseSectionData(
       // Table cell takes highest priority — paragraphs inside table cells
       // (even within headers/footers/footnotes) must go to cellParagraphs,
       // UNLESS they belong to a shape text overlay (caption etc.)
+      // or are image/drawing host paragraphs (those are already tracked via cell.elements).
       if (ctx.inShapeText && currentParagraphLevel >= shapeTextLevel) {
         ctx.shapeTextParagraphs.push(ctx.currentParagraph);
+      } else if (cellParaIsImageHost) {
+        // Skip: image host paragraph in cell; image already added to cell.elements
+        cellParaIsImageHost = false;
       } else {
         ctx.cellParagraphs.push(ctx.currentParagraph);
       }
@@ -923,6 +1001,13 @@ function parseSectionData(
       ctx.shapeTextParagraphs.push(ctx.currentParagraph);
     } else if (currentParagraphLevel === 0) {
       section.elements.push({ type: 'paragraph', data: ctx.currentParagraph });
+    }
+    // Flush deferred images after their host paragraph
+    if (pendingParaImages.length > 0) {
+      for (const img of pendingParaImages) {
+        section.elements.push({ type: 'image', data: img });
+      }
+      pendingParaImages = [];
     }
     ctx.currentParagraph = null;
   };
@@ -948,6 +1033,7 @@ function parseSectionData(
   let currentTableLevel = 0;
   let cellContentLevel = -1;
   let headerFooterLevel = -1;
+  let headerFooterType: 'header' | 'footer' = 'header';
   let footnoteEndnoteLevel = -1;
   let memoLevel = -1;
   let shapeTextLevel = -1;
@@ -963,6 +1049,8 @@ function parseSectionData(
       }
       if (ctx.inShapeText && currentParagraphLevel >= shapeTextLevel) {
         ctx.shapeTextParagraphs.push(ctx.currentParagraph);
+      } else if (cellParaIsImageHost) {
+        cellParaIsImageHost = false;
       } else {
         ctx.cellParagraphs.push(ctx.currentParagraph);
       }
@@ -972,33 +1060,11 @@ function parseSectionData(
     const row = ctx.currentTableRow;
     const col = ctx.currentTableCol;
     if (row < ctx.tableRowCount && col < ctx.tableColCount && ctx.tableCells[row]) {
-      // Normalize cell paragraphs: remove leading/trailing empty paragraphs and
-      // collapse consecutive empty paragraphs into one to match HWPX output.
-      let normalized = [...ctx.cellParagraphs];
-      const isEmptyParagraph = (p: typeof normalized[0]) =>
-        p.runs.every(r => !r.text || r.text.trim() === '');
-      // Remove leading empty paragraphs
-      while (normalized.length > 0 && isEmptyParagraph(normalized[0])) {
-        normalized.shift();
-      }
-      // Remove trailing empty paragraphs
-      while (normalized.length > 0 && isEmptyParagraph(normalized[normalized.length - 1])) {
-        normalized.pop();
-      }
-      // Collapse consecutive empty paragraphs into one
-      const collapsed: typeof normalized = [];
-      let prevWasEmpty = false;
-      for (const p of normalized) {
-        const empty = isEmptyParagraph(p);
-        if (empty && prevWasEmpty) continue;
-        collapsed.push(p);
-        prevWasEmpty = empty;
-      }
-      ctx.tableCells[row][col].paragraphs = collapsed;
+      ctx.tableCells[row][col].paragraphs = [...ctx.cellParagraphs];
       // Populate cell.elements from paragraphs to match HWPX structure.
       // The webview uses cell.elements when available, falling back to cell.paragraphs.
       if (!ctx.tableCells[row][col].elements) ctx.tableCells[row][col].elements = [];
-      for (const p of collapsed) {
+      for (const p of ctx.cellParagraphs) {
         ctx.tableCells[row][col].elements!.push({ type: 'paragraph', data: p });
       }
     }
@@ -1032,6 +1098,8 @@ function parseSectionData(
         }
       }
     }
+
+
 
     const rows: TableRow[] = [];
     for (let r = 0; r < ctx.tableRowCount; r++) {
@@ -1144,6 +1212,14 @@ function parseSectionData(
       const _isParaSubTag = tagId >= HWP_TAGS.HWPTAG_PARA_HEADER && tagId <= HWP_TAGS.HWPTAG_PARA_RANGE_TAG;
       if (ctx.inHeaderFooter && headerFooterLevel >= 0 && level <= headerFooterLevel && !_isParaSubTag) {
         pushCurrentParagraph();
+        if (ctx.headerFooterParagraphs.length > 0) {
+          const hf = { paragraphs: ctx.headerFooterParagraphs };
+          if (headerFooterType === 'header') {
+            section.header = hf;
+          } else {
+            section.footer = hf;
+          }
+        }
         ctx.inHeaderFooter = false;
         headerFooterLevel = -1;
       }
@@ -1179,6 +1255,7 @@ function parseSectionData(
                 // Always emit equations at section level to match HWPX behavior
                 if (!ctx.inHeaderFooter && !ctx.inFootnoteEndnote) {
                   section.elements.push({ type: 'equation', data: equation });
+                  paraWasImageHost = true;
                 }
                 ctx.inEquation = false;
               }
@@ -1201,6 +1278,16 @@ function parseSectionData(
           ctx.pendingTextSegments = [];
           paraTextHadInlineControls = false;
           paraTextWasPresent = false;
+          paraWasImageHost = false;
+          cellParaIsImageHost = false;
+          // Flush any images that weren't flushed by pushCurrentParagraph
+          // (shouldn't normally happen, but be safe)
+          if (pendingParaImages.length > 0) {
+            for (const img of pendingParaImages) {
+              section.elements.push({ type: 'image', data: img });
+            }
+            pendingParaImages = [];
+          }
           if (memoListActive && level >= memoListLevel) {
            discardCurrentParagraph = true;
          }
@@ -1208,18 +1295,18 @@ function parseSectionData(
           const paraShapeId = readUint16(recordData, 8);
           const paraShape = ctx.paraShapes.get(paraShapeId);
           if (paraShape) {
-            const alignMap: Record<number, 'justify' | 'left' | 'right' | 'center' | 'distribute'> = {
-              0: 'justify', 1: 'left', 2: 'right', 3: 'center', 4: 'distribute', 5: 'distribute'
+            const alignMap: Record<number, 'Justify' | 'Left' | 'Right' | 'Center' | 'Distribute'> = {
+              0: 'Justify', 1: 'Left', 2: 'Right', 3: 'Center', 4: 'Distribute', 5: 'Distribute'
             };
             ctx.currentParagraph.paraStyle = {
-              align: alignMap[paraShape.alignment] || 'justify',
+              align: alignMap[paraShape.alignment] || 'Justify',
               marginLeft: hwpunitToPt(paraShape.leftMargin),
               marginRight: hwpunitToPt(paraShape.rightMargin),
               firstLineIndent: hwpunitToPt(paraShape.indent),
               marginTop: hwpunitToPt(paraShape.spacingBefore),
               marginBottom: hwpunitToPt(paraShape.spacingAfter),
-              lineSpacing: paraShape.lineSpacingType === 0 ? paraShape.lineSpacing : paraShape.lineSpacing / 100,
-              lineSpacingType: paraShape.lineSpacingType === 0 ? 'percent' : 'fixed',
+              lineSpacing: paraShape.lineSpacing / 100,
+              lineSpacingType: paraShape.lineSpacingType === 0 ? undefined : 'fixed',
               keepWithNext: paraShape.keepWithNext,
               keepLines: paraShape.keepTogether,
             };
@@ -1378,14 +1465,21 @@ function parseSectionData(
               ctx.inTableCell = false;
               ctx.cellParagraphs = [];
               currentTableLevel = level;
-           } else if (ctx.currentCtrlId === CTRL_ID.PICTURE || ctx.currentCtrlId === CTRL_ID.GSO) {
-              // Host paragraph for PICTURE/GSO: if at section level with no visible text,
-              // discard it since HWPX doesn't emit host paragraphs for images/drawings.
+           } else if (ctx.currentCtrlId === CTRL_ID.PICTURE || ctx.currentCtrlId === CTRL_ID.GSO
+                       || ctx.currentCtrlId === CTRL_ID.LINE || ctx.currentCtrlId === CTRL_ID.RECTANGLE
+                       || ctx.currentCtrlId === CTRL_ID.ELLIPSE || ctx.currentCtrlId === CTRL_ID.TEXTBOX
+                       || ctx.currentCtrlId === CTRL_ID.EQUATION) {
+              // Host paragraph for drawing/equation objects: if with no visible text,
+              // discard it since HWPX doesn't emit host paragraphs for images/drawings/equations.
               if (ctx.currentParagraph && !ctx.inHeaderFooter && !ctx.inFootnoteEndnote
-                  && !ctx.inMemo && !ctx.inShapeText && !ctx.inTableCell
+                  && !ctx.inMemo && !ctx.inShapeText
                   && paraTextWasPresent && paraTextHadInlineControls
                   && ctx.pendingTextSegments.length === 0 && ctx.currentParagraph.runs.length === 0) {
-                discardCurrentParagraph = true;
+                if (ctx.inTableCell) {
+                  cellParaIsImageHost = true;
+                } else {
+                  discardCurrentParagraph = true;
+                }
               }
               ctx.pendingImage = { width: 200, height: 150 };
              if (recordData.length >= 46) {
@@ -1404,6 +1498,7 @@ function parseSectionData(
             ctx.inHeaderFooter = true;
             ctx.headerFooterParagraphs = [];
             headerFooterLevel = level;
+            headerFooterType = ctx.currentCtrlId === CTRL_ID.HEADER ? 'header' : 'footer';
            } else if (ctx.currentCtrlId === CTRL_ID.FOOTNOTE || ctx.currentCtrlId === CTRL_ID.ENDNOTE) {
              ctx.inFootnoteEndnote = true;
              ctx.footnoteEndnoteParagraphs = [];
@@ -1507,6 +1602,8 @@ function parseSectionData(
                 }
                 if (ctx.inShapeText && currentParagraphLevel >= shapeTextLevel) {
                   ctx.shapeTextParagraphs.push(ctx.currentParagraph);
+                } else if (cellParaIsImageHost) {
+                  cellParaIsImageHost = false;
                 } else {
                   ctx.cellParagraphs.push(ctx.currentParagraph);
                 }
@@ -1570,7 +1667,7 @@ function parseSectionData(
                 cell.backgroundColor = colorrefToHex((fill as ParsedSolidFill).backgroundColor);
               } else if (fill && fill.fillType === 'gradient' && (fill as ParsedGradientFill).colors && (fill as ParsedGradientFill).colors.length > 0) {
                 const gf = fill as ParsedGradientFill;
-                const gradTypeMap: Record<number, string> = { 1: 'Linear', 2: 'Radial', 3: 'Conical', 4: 'Square' };
+                const gradTypeMap: Record<number, import('./types').GradationType> = { 1: 'Linear', 2: 'Radial', 3: 'Conical', 4: 'Square' };
                 cell.backgroundGradation = {
                   type: gradTypeMap[gf.gradientType] || 'Linear',
                   angle: gf.angle || 0,
@@ -1582,7 +1679,6 @@ function parseSectionData(
                 const borderStyleMap: Record<number, string> = { 0: 'none', 1: 'solid', 2: 'dashed', 3: 'dotted', 4: 'dashed', 5: 'dashed', 6: 'dashed', 7: 'dotted', 8: 'double', 255: 'none' };
                 const mapBorder = (b: ParsedBorderLine) => {
                   const style = borderStyleMap[b.type] ?? 'solid';
-                  if (style === 'none') return undefined;
                   return {
                     style,
                     width: b.width * 2.83465,
@@ -1671,17 +1767,28 @@ function parseSectionData(
             data: existingImage?.data,
             mimeType: existingImage?.mimeType,
           };
-          // Emit images at section level to match HWPX behavior.
-          // HWPX puts floating images (textWrap=topAndBottom etc.) at section level
-          // even when they're anchored to a paragraph inside a table cell.
-          // When inside a table, defer emission so images appear AFTER their
-          // containing table in the element list (matching HWPX ordering).
+          // Emit images: if inside a table cell, keep in cell to match HWPX structure.
+          // Otherwise emit at section level.
           if (!ctx.inHeaderFooter && !ctx.inFootnoteEndnote) {
-            if (ctx.currentTable || tableStack.length > 0) {
+            if (ctx.inTableCell) {
+              // Image is inside a table cell - store as cell element
+              // Initialize elements array on the current cell if needed
+              const row = ctx.currentTableRow;
+              const col = ctx.currentTableCol;
+              if (row < ctx.tableRowCount && col < ctx.tableColCount && ctx.tableCells[row]?.[col]) {
+                if (!ctx.tableCells[row][col].elements) {
+                  ctx.tableCells[row][col].elements = [];
+                }
+                ctx.tableCells[row][col].elements!.push({ type: 'image', data: image });
+              }
+            } else if (ctx.currentTable || tableStack.length > 0) {
               ctx.pendingSectionImages.push(image);
             } else {
-              section.elements.push({ type: 'image', data: image });
+              // Defer image emission until after the host paragraph is pushed,
+              // to maintain paragraph-before-image ordering matching HWPX.
+              pendingParaImages.push(image);
             }
+            paraWasImageHost = true;
           }
           ctx.pendingImage = null;
         }
@@ -1701,6 +1808,8 @@ function parseSectionData(
             marginRight: readUint32(recordData, 12) / 100,
             marginTop: readUint32(recordData, 16) / 100,
             marginBottom: readUint32(recordData, 20) / 100,
+            headerMargin: readUint32(recordData, 24) / 100,
+            footerMargin: readUint32(recordData, 28) / 100,
             orientation: (readUint32(recordData, 36) & 0x01) ? 'landscape' : 'portrait',
           };
         }
@@ -1721,6 +1830,18 @@ function parseSectionData(
 
    if (ctx.currentParagraph) {
     pushCurrentParagraph();
+  }
+
+  // Finalize header/footer if still open at end of section
+  if (ctx.inHeaderFooter && ctx.headerFooterParagraphs.length > 0) {
+    const hf = { paragraphs: ctx.headerFooterParagraphs };
+    if (headerFooterType === 'header') {
+      section.header = hf;
+    } else {
+      section.footer = hf;
+    }
+    ctx.inHeaderFooter = false;
+    headerFooterLevel = -1;
   }
 
    if (section.elements.length === 0) {

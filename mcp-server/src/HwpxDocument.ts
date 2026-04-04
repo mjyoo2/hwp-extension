@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
-import { HwpxParser } from './HwpxParser';
-import { HwpParser } from './HwpParser';
+import { HwpxParser } from '../../shared/src/HwpxParser';
+import { parseHwpContent } from '../../shared/src/HwpParser';
+import { writeHwpContent } from '../../shared/src/HwpWriter';
 import {
   HwpxContent,
   HwpxParagraph,
@@ -27,7 +28,7 @@ import {
   HwpxEquation,
   HeaderFooter,
   HwpxTextBox,
-} from './types';
+} from '../../shared/src/types';
 
 type DocumentFormat = 'hwpx' | 'hwp';
 
@@ -67,8 +68,11 @@ export class HwpxDocument {
   public static async createFromBuffer(id: string, path: string, data: Buffer): Promise<HwpxDocument> {
     const extension = path.toLowerCase();
 
-    if (extension.endsWith('.hwp')) {
-      const content = HwpParser.parse(new Uint8Array(data));
+    // Detect actual format by magic bytes: ZIP starts with PK (0x504B), OLE with 0xD0CF
+    const isZip = data.length >= 2 && data[0] === 0x50 && data[1] === 0x4B;
+
+    if (extension.endsWith('.hwp') && !isZip) {
+      const content = parseHwpContent(new Uint8Array(data));
       return new HwpxDocument(id, path, null, content, 'hwp');
     } else {
       const zip = await JSZip.loadAsync(data);
@@ -224,10 +228,7 @@ export class HwpxDocument {
             text += captionText + '\n';
           }
         } else if (element.type === 'container') {
-          const captionText = this.extractCaptionText(element.data?.caption);
-          if (captionText) {
-            text += captionText + '\n';
-          }
+          // HwpxContainer has no caption field
         } else if (element.type === 'textbox') {
           const tbText = this.extractParagraphsText(element.data?.paragraphs);
           if (tbText) {
@@ -248,7 +249,7 @@ export class HwpxDocument {
     return text;
   }
 
-  private extractHeaderFooterText(hf?: import('./types').HeaderFooter): string {
+  private extractHeaderFooterText(hf?: import('../../shared/src/types').HeaderFooter): string {
     if (!hf) return '';
     let text = '';
     if (hf.elements && hf.elements.length > 0) {
@@ -272,7 +273,7 @@ export class HwpxDocument {
     return text;
   }
 
-  private extractTableText(table: import('./types').HwpxTable): string {
+  private extractTableText(table: import('../../shared/src/types').HwpxTable): string {
     if (!table?.rows) return '';
     const lines: string[] = [];
 
@@ -298,7 +299,7 @@ export class HwpxDocument {
     return lines.join('\n');
   }
 
-  private extractCellText(cell: import('./types').TableCell): string {
+  private extractCellText(cell: import('../../shared/src/types').TableCell): string {
     if (!cell) return '';
     const parts: string[] = [];
     // When elements array exists, use it (contains paragraphs, nested tables, and images in order)
@@ -345,12 +346,14 @@ export class HwpxDocument {
     return parts.join('\n');
   }
 
-  private extractCaptionText(caption?: import('./types').Caption): string {
-    if (!caption?.paragraphs) return '';
+  private extractCaptionText(caption?: import('../../shared/src/types').Caption | string): string {
+    if (!caption) return '';
+    if (typeof caption === 'string') return caption;
+    if (!caption.paragraphs) return '';
     return this.extractParagraphsText(caption.paragraphs);
   }
 
-  private extractParagraphsText(paragraphs?: import('./types').HwpxParagraph[]): string {
+  private extractParagraphsText(paragraphs?: import('../../shared/src/types').HwpxParagraph[]): string {
     if (!paragraphs) return '';
     const parts: string[] = [];
     for (const para of paragraphs) {
@@ -2180,6 +2183,25 @@ export class HwpxDocument {
     return await this._zip.generateAsync({ type: 'nodebuffer' });
   }
 
+  async saveAsHwpx(): Promise<Buffer> {
+    const newZip = await HwpxParser.createNewHwpxZip(this._content);
+    return await newZip.generateAsync({ type: 'nodebuffer' });
+  }
+
+  saveAsHwp(): Buffer {
+    // Generate HWP binary data
+    const data = writeHwpContent(this._content);
+
+    // Validate: try to re-parse the written data to ensure it's not corrupted
+    try {
+      parseHwpContent(new Uint8Array(data));
+    } catch (e: any) {
+      throw new Error(`HWP 저장 검증 실패 (파일이 깨질 수 있어 저장하지 않았습니다): ${e.message}`);
+    }
+
+    return Buffer.from(data);
+  }
+
   private async syncContentToZip(): Promise<void> {
     if (!this._zip) return;
 
@@ -2806,7 +2828,7 @@ export class HwpxDocument {
     return xml;
   }
 
-  private generateHeaderFooterXml(hf: import('./types').HeaderFooter, type: 'header' | 'footer'): string {
+  private generateHeaderFooterXml(hf: import('../../shared/src/types').HeaderFooter, type: 'header' | 'footer'): string {
     let xml = `  <hp:${type}>\n`;
     for (const para of hf.paragraphs) {
       xml += this.generateParagraphXml(para, 4);

@@ -50,12 +50,12 @@ const tools = [
   },
   {
     name: 'save_document',
-    description: 'Save the document (HWPX only)',
+    description: 'Save the document. Supports HWPX format natively. Can export to HWP format (.hwp extension) or convert HWP to HWPX (.hwpx extension).',
     inputSchema: {
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        output_path: { type: 'string', description: 'Output path (optional, saves to original if omitted)' },
+        output_path: { type: 'string', description: 'Output path (optional, saves to original if omitted). Use .hwp extension to export as HWP, .hwpx to export as HWPX.' },
       },
       required: ['doc_id'],
     },
@@ -637,9 +637,9 @@ const tools = [
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        output_path: { type: 'string', description: 'Output file path' },
+        output_path: { type: 'string', description: 'Output file path (optional)' },
       },
-      required: ['doc_id', 'output_path'],
+      required: ['doc_id'],
     },
   },
   {
@@ -649,9 +649,9 @@ const tools = [
       type: 'object',
       properties: {
         doc_id: { type: 'string', description: 'Document ID' },
-        output_path: { type: 'string', description: 'Output file path' },
+        output_path: { type: 'string', description: 'Output file path (optional)' },
       },
-      required: ['doc_id', 'output_path'],
+      required: ['doc_id'],
     },
   },
 
@@ -1281,13 +1281,66 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'save_document': {
         const doc = getDoc(args?.doc_id as string);
         if (!doc) return error('Document not found');
-        if (doc.format === 'hwp') return error('HWP files are read-only');
 
-        const data = await doc.save();
         const savePath = (args?.output_path as string) || doc.path;
-        fs.writeFileSync(savePath, data);
 
-        return success({ message: `Saved to ${savePath}` });
+        if (savePath.toLowerCase().endsWith('.hwp')) {
+          let data: Buffer;
+          try {
+            data = doc.saveAsHwp();
+          } catch (e: any) {
+            return error(`HWP save failed: ${e.message}`);
+          }
+
+          // Verify OLE signature before writing
+          if (data.length < 4 || data[0] !== 0xD0 || data[1] !== 0xCF) {
+            return error('HWP save failed: output is not valid OLE compound format');
+          }
+
+          // Backup original if it exists
+          try {
+            if (fs.existsSync(savePath)) {
+              fs.copyFileSync(savePath, savePath + '.bak');
+            }
+          } catch {
+            // Original file may not exist (new file) - that's OK
+          }
+
+          fs.writeFileSync(savePath, data);
+          return success({ message: `Saved as HWP to ${savePath} (${data.length} bytes)` });
+        } else {
+          if (doc.format === 'hwp') {
+            // HWP→HWPX conversion: create new HWPX from content
+            let data: Buffer;
+            try {
+              data = await doc.saveAsHwpx();
+            } catch (e: any) {
+              return error(`HWPX export failed: ${e.message}`);
+            }
+
+            try {
+              if (fs.existsSync(savePath)) {
+                fs.copyFileSync(savePath, savePath + '.bak');
+              }
+            } catch {}
+
+            fs.writeFileSync(savePath, data);
+            return success({ message: `Exported HWP to HWPX: ${savePath} (${data.length} bytes)` });
+          }
+
+          // Backup original if it exists
+          try {
+            if (fs.existsSync(savePath)) {
+              fs.copyFileSync(savePath, savePath + '.bak');
+            }
+          } catch {
+            // Original file may not exist (new file) - that's OK
+          }
+
+          const data = await doc.save();
+          fs.writeFileSync(savePath, data);
+          return success({ message: `Saved as HWPX to ${savePath}` });
+        }
       }
 
       case 'list_open_documents': {
@@ -1539,6 +1592,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return success({
           query: args?.query,
           total_matches: results.reduce((sum, r) => sum + r.count, 0),
+          results: results,
           locations: results,
         });
       }
@@ -1828,9 +1882,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) return error('Document not found');
 
         const text = doc.getAllText();
-        const outputPath = args?.output_path as string;
-        fs.writeFileSync(outputPath, text, 'utf-8');
-        return success({ message: `Exported to ${outputPath}`, characters: text.length });
+        const outputPath = args?.output_path as string | undefined;
+        if (outputPath) {
+          fs.writeFileSync(outputPath, text, 'utf-8');
+        }
+        return success({ text, message: outputPath ? `Exported to ${outputPath}` : undefined, characters: text.length });
       }
 
       case 'export_to_html': {
@@ -1867,9 +1923,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         html += '</body></html>';
-        const outputPath = args?.output_path as string;
-        fs.writeFileSync(outputPath, html, 'utf-8');
-        return success({ message: `Exported to ${outputPath}` });
+        const outputPath = args?.output_path as string | undefined;
+        if (outputPath) {
+          fs.writeFileSync(outputPath, html, 'utf-8');
+        }
+        return success({ html, message: outputPath ? `Exported to ${outputPath}` : undefined });
       }
 
       // === Undo/Redo ===

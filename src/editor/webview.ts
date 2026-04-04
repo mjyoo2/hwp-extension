@@ -1248,7 +1248,8 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
           cellStyle += formatBorder('border-right', cell.borderRight);
           cellStyle += formatBorder('border-bottom', cell.borderBottom);
           cellStyle += formatBorder('border-left', cell.borderLeft);
-          if (!cell.borderTop && !cell.borderRight && !cell.borderBottom && !cell.borderLeft) {
+          const hasVisibleBorder = (b) => b && b.style && b.style !== 'none';
+          if (!hasVisibleBorder(cell.borderTop) && !hasVisibleBorder(cell.borderRight) && !hasVisibleBorder(cell.borderBottom) && !hasVisibleBorder(cell.borderLeft)) {
             cellStyle += 'border: 1px solid #000;';
           }
           if (cell.width) cellStyle += 'width:' + cell.width + 'pt;';
@@ -1383,7 +1384,8 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
           cellStyle += formatBorder('border-right', cell.borderRight);
           cellStyle += formatBorder('border-bottom', cell.borderBottom);
           cellStyle += formatBorder('border-left', cell.borderLeft);
-          if (!cell.borderTop && !cell.borderRight && !cell.borderBottom && !cell.borderLeft) {
+          const hasVisibleBorder = (b) => b && b.style && b.style !== 'none';
+          if (!hasVisibleBorder(cell.borderTop) && !hasVisibleBorder(cell.borderRight) && !hasVisibleBorder(cell.borderBottom) && !hasVisibleBorder(cell.borderLeft)) {
             cellStyle += 'border: 1px solid #000;';
           }
           if (cell.width) cellStyle += 'width:' + cell.width + 'pt;';

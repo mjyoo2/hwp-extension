@@ -16,3 +16,15 @@ mcp-server/**
 icon.svg
 CLAUDE.md
 package-lock.json
+
+# Diagnostic/debug files
+check-styles.ts
+compare-formats.ts
+diag-*.ts
+out/check-styles.js
+out/compare-formats.js
+out/diag-*
+
+# Plugin state
+.omc/**
+out/.omc/**

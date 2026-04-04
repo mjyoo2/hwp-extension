@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import JSZip from 'jszip';
-import { HwpxParser } from './HwpxParser';
-import { HwpDocument } from '../hwp/HwpDocument';
+import { HwpxParser } from '../../shared/src/HwpxParser';
+import { HwpParser } from '../hwp/HwpParser';
+import { parseHwpContent } from '../../shared/src/HwpParser';
 import {
   HwpxContent,
   HwpxParagraph,
@@ -11,7 +12,7 @@ import {
   HwpxTable,
   TableCell,
   SectionElement,
-} from './types';
+} from '../../shared/src/types';
 
 type DocumentFormat = 'hwpx' | 'hwp';
 
@@ -40,9 +41,12 @@ export class HwpxDocument implements vscode.CustomDocument {
   public static async create(uri: vscode.Uri): Promise<HwpxDocument> {
     const fileData = await vscode.workspace.fs.readFile(uri);
     const extension = uri.fsPath.toLowerCase();
-    
-    if (extension.endsWith('.hwp')) {
-      const content = HwpDocument.parseContent(fileData);
+
+    // Detect actual format by magic bytes: ZIP starts with PK (0x504B), OLE with 0xD0CF
+    const isZip = fileData.length >= 2 && fileData[0] === 0x50 && fileData[1] === 0x4B;
+
+    if (extension.endsWith('.hwp') && !isZip) {
+      const content = parseHwpContent(fileData);
       return new HwpxDocument(uri, null, content, 'hwp');
     } else {
       const zip = await JSZip.loadAsync(fileData);
@@ -74,7 +78,7 @@ export class HwpxDocument implements vscode.CustomDocument {
       images: newImages,
       footnotes: content.footnotes,
       endnotes: content.endnotes,
-      isReadOnly: this._format === 'hwp',
+      isReadOnly: false,
     };
   }
 
@@ -484,20 +488,19 @@ export class HwpxDocument implements vscode.CustomDocument {
 
   async save(): Promise<void> {
     if (this._format === 'hwp') {
-      await this.promptSaveAsHwpx();
+      await this.saveAsHwp(this._uri);
       return;
     }
     await this.saveAs(this._uri);
   }
 
   async saveAs(targetUri: vscode.Uri): Promise<void> {
-    if (this._format === 'hwp') {
-      const targetPath = targetUri.fsPath.toLowerCase();
-      if (targetPath.endsWith('.hwp')) {
-        const hwpxUri = vscode.Uri.file(targetUri.fsPath.replace(/\.hwp$/i, '.hwpx'));
-        await this.saveAsHwpx(hwpxUri);
-        return;
-      }
+    const targetPath = targetUri.fsPath.toLowerCase();
+    if (targetPath.endsWith('.hwp')) {
+      await this.saveAsHwp(targetUri);
+      return;
+    }
+    if (this._format === 'hwp' && !targetPath.endsWith('.hwp')) {
       await this.saveAsHwpx(targetUri);
       return;
     }
@@ -512,23 +515,38 @@ export class HwpxDocument implements vscode.CustomDocument {
     this._isDirty = false;
   }
 
-  private async promptSaveAsHwpx(): Promise<void> {
-    const originalPath = this._uri.fsPath;
-    const suggestedPath = originalPath.replace(/\.hwp$/i, '.hwpx');
-    
-    const result = await vscode.window.showSaveDialog({
-      defaultUri: vscode.Uri.file(suggestedPath),
-      filters: {
-        'HWPX Files': ['hwpx'],
-        'All Files': ['*']
-      },
-      title: 'Save as HWPX (HWP files cannot be modified directly)'
-    });
+  private async saveAsHwp(targetUri: vscode.Uri): Promise<void> {
+    const content = this._content;
+    let data: Uint8Array;
 
-    if (result) {
-      await this.saveAsHwpx(result);
-      vscode.window.showInformationMessage(`Document saved as HWPX: ${result.fsPath}`);
+    // Generate HWP binary data
+    try {
+      data = HwpParser.write(content);
+    } catch (e: any) {
+      vscode.window.showErrorMessage(`HWP 저장 실패: ${e.message}`);
+      return;
     }
+
+    // Validate: try to re-parse the written data
+    try {
+      parseHwpContent(data);
+    } catch (e: any) {
+      vscode.window.showErrorMessage(`HWP 저장 검증 실패 (파일이 깨질 수 있어 저장하지 않았습니다): ${e.message}`);
+      return;
+    }
+
+    // Backup original if it exists
+    try {
+      const backupUri = vscode.Uri.file(targetUri.fsPath + '.bak');
+      const originalData = await vscode.workspace.fs.readFile(targetUri);
+      await vscode.workspace.fs.writeFile(backupUri, originalData);
+    } catch {
+      // Original file may not exist (new file) - that's OK
+    }
+
+    // Write the validated data
+    await vscode.workspace.fs.writeFile(targetUri, data);
+    this._isDirty = false;
   }
 
   private async saveAsHwpx(targetUri: vscode.Uri): Promise<void> {
@@ -545,7 +563,7 @@ export class HwpxDocument implements vscode.CustomDocument {
     const fileData = await vscode.workspace.fs.readFile(this._uri);
     
     if (this._format === 'hwp') {
-      this._content = HwpDocument.parseContent(fileData);
+      this._content = parseHwpContent(fileData);
     } else {
       this._zip = await JSZip.loadAsync(fileData);
       this._content = await HwpxParser.parse(this._zip);

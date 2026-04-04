@@ -3,8 +3,8 @@ import * as path from 'path';
 import JSZip from 'jszip';
 import { HwpxEditorProvider } from './editor/HwpxEditorProvider';
 import { HwpEditorProvider } from './editor/HwpEditorProvider';
-import { HwpDocument } from './hwp/HwpDocument';
-import { HwpxParser } from './hwpx/HwpxParser';
+import { parseHwpContent } from '../shared/src/HwpParser';
+import { HwpxParser } from '../shared/src/HwpxParser';
 
 export function activate(context: vscode.ExtensionContext) {
   // Register the custom editors
@@ -111,7 +111,7 @@ export function activate(context: vscode.ExtensionContext) {
         async () => {
           try {
             const fileData = await vscode.workspace.fs.readFile(sourceUri!);
-            const content = HwpDocument.parseContent(fileData);
+            const content = parseHwpContent(fileData);
             const zip = await HwpxParser.createNewHwpxZip(content);
             const data = await zip.generateAsync({ type: 'uint8array' });
             await vscode.workspace.fs.writeFile(targetUri!, data);
