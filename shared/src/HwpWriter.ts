@@ -211,7 +211,7 @@ function paraStyleToShape(ps: ParagraphStyle | undefined): ParsedParaShape {
     indent: ps?.firstLineIndent ? ptToHwpunit(ps.firstLineIndent) : 0,
     spacingBefore: ps?.marginTop ? ptToHwpunit(ps.marginTop) : 0,
     spacingAfter: ps?.marginBottom ? ptToHwpunit(ps.marginBottom) : 0,
-    lineSpacing: ps?.lineSpacing ? Math.round(ps.lineSpacing * 100) : 16000, // default 160%
+    lineSpacing: ps?.lineSpacing ? (ps.lineSpacingType ? Math.round(ptToHwpunit(ps.lineSpacing)) : ps.lineSpacing) : 16000, // default 160%
     lineSpacingType: ps?.lineSpacingType ? (lineSpacingTypeMap[ps.lineSpacingType] ?? 0) : 0,
     tabDefId: ps?.tabDefId ?? 0,
     numberingId: 0,

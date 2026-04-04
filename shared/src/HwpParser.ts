@@ -955,7 +955,7 @@ function parseSectionData(
             firstLineIndent: hwpunitToPt(psShape.indent),
             marginTop: hwpunitToPt(psShape.spacingBefore),
             marginBottom: hwpunitToPt(psShape.spacingAfter),
-            lineSpacing: psShape.lineSpacing / 100,
+            lineSpacing: psShape.lineSpacingType === 0 ? psShape.lineSpacing : hwpunitToPt(psShape.lineSpacing),
             lineSpacingType: psShape.lineSpacingType === 0 ? undefined : 'fixed',
             keepWithNext: psShape.keepWithNext,
             keepLines: psShape.keepTogether,
@@ -1109,9 +1109,18 @@ function parseSectionData(
         const cell = ctx.tableCells[r]?.[c];
         if (cell) {
           if (cell.paragraphs.length === 0) cell.paragraphs.push({ id: generateId(), runs: [{ text: '' }] });
-          // Ensure cell.elements is populated from paragraphs (+ any existing elements like nested tables)
+          // Ensure cell.elements contains both paragraphs and any existing elements (images, nested tables).
+          // Images/tables are pushed directly to cell.elements during parsing, but paragraphs
+          // are only saved to cell.paragraphs at cell transitions. Merge them here.
           if (!cell.elements || cell.elements.length === 0) {
             cell.elements = cell.paragraphs.map(p => ({ type: 'paragraph' as const, data: p }));
+          } else {
+            const hasParaElements = cell.elements.some(e => e.type === 'paragraph');
+            if (!hasParaElements && cell.paragraphs.length > 0) {
+              // Prepend paragraphs before existing images/tables to match typical HWPX ordering
+              const paraElements = cell.paragraphs.map(p => ({ type: 'paragraph' as const, data: p }));
+              cell.elements = [...paraElements, ...cell.elements];
+            }
           }
           cells.push(cell);
         }
@@ -1305,7 +1314,7 @@ function parseSectionData(
               firstLineIndent: hwpunitToPt(paraShape.indent),
               marginTop: hwpunitToPt(paraShape.spacingBefore),
               marginBottom: hwpunitToPt(paraShape.spacingAfter),
-              lineSpacing: paraShape.lineSpacing / 100,
+              lineSpacing: paraShape.lineSpacingType === 0 ? paraShape.lineSpacing : hwpunitToPt(paraShape.lineSpacing),
               lineSpacingType: paraShape.lineSpacingType === 0 ? undefined : 'fixed',
               keepWithNext: paraShape.keepWithNext,
               keepLines: paraShape.keepTogether,

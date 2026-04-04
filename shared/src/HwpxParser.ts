@@ -701,11 +701,13 @@ export class HwpxParser {
         }
       }
       if (lineSpaceMatch) {
-        paraShape.lineSpacing = parseInt(lineSpaceMatch[2]);
+        const rawValue = parseInt(lineSpaceMatch[2]);
         const typeMap: Record<string, string> = {
           'PERCENT': 'percent', 'FIXED': 'fixed', 'BETWEEN_LINES': 'betweenLines', 'AT_LEAST': 'atLeast'
         };
         paraShape.lineSpacingType = typeMap[lineSpaceMatch[1]?.toUpperCase()] || 'percent';
+        // For PERCENT, value is percentage (e.g., 160 = 160%). For fixed types, value is in hwpUnit (1/100 pt).
+        paraShape.lineSpacing = paraShape.lineSpacingType === 'percent' ? rawValue : rawValue / 100;
       }
 
       const defaultMatch = shapeContent.match(/<hp:default[^>]*>([\s\S]*?)<\/hp:default>/i);
@@ -2095,6 +2097,7 @@ export class HwpxParser {
         paragraph.paraStyle = {
           align: paraShape.align as ParagraphStyle['align'],
           lineSpacing: paraShape.lineSpacing,
+          lineSpacingType: paraShape.lineSpacingType,
           marginTop: paraShape.marginTop,
           marginBottom: paraShape.marginBottom,
           marginLeft: paraShape.marginLeft,

@@ -1056,7 +1056,13 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
         classes.push('outline-' + paragraph.outlineLevel);
       }
       let inlineStyle = '';
-      if (style.lineSpacing) inlineStyle += 'line-height: ' + (style.lineSpacing / 100) + ';';
+      if (style.lineSpacing) {
+        if (style.lineSpacingType === 'fixed') {
+          inlineStyle += 'line-height: ' + style.lineSpacing + 'pt;';
+        } else {
+          inlineStyle += 'line-height: ' + (style.lineSpacing / 100) + ';';
+        }
+      }
       if (style.marginTop) inlineStyle += 'margin-top: ' + style.marginTop + 'pt;';
       if (style.marginBottom) inlineStyle += 'margin-bottom: ' + style.marginBottom + 'pt;';
       // Handle margin and indent properly for hanging indent
@@ -1286,7 +1292,7 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
                 let paraStyle = '';
                 if (p.paraStyle) {
                   if (p.paraStyle.align) paraStyle += 'text-align:' + p.paraStyle.align.toLowerCase() + ';';
-                  if (p.paraStyle.lineSpacing) paraStyle += 'line-height:' + (p.paraStyle.lineSpacing / 100) + ';';
+                  if (p.paraStyle.lineSpacing) paraStyle += 'line-height:' + (p.paraStyle.lineSpacingType === 'fixed' ? p.paraStyle.lineSpacing + 'pt' : (p.paraStyle.lineSpacing / 100)) + ';';
                   if (p.paraStyle.marginTop) paraStyle += 'margin-top:' + p.paraStyle.marginTop + 'pt;';
                   if (p.paraStyle.marginBottom) paraStyle += 'margin-bottom:' + p.paraStyle.marginBottom + 'pt;';
                   // Handle hanging indent (negative firstLineIndent) properly in table cells
@@ -1323,7 +1329,7 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
               let paraStyle = '';
               if (p.paraStyle) {
                 if (p.paraStyle.align) paraStyle += 'text-align:' + p.paraStyle.align.toLowerCase() + ';';
-                if (p.paraStyle.lineSpacing) paraStyle += 'line-height:' + (p.paraStyle.lineSpacing / 100) + ';';
+                if (p.paraStyle.lineSpacing) paraStyle += 'line-height:' + (p.paraStyle.lineSpacingType === 'fixed' ? p.paraStyle.lineSpacing + 'pt' : (p.paraStyle.lineSpacing / 100)) + ';';
                 if (p.paraStyle.marginTop) paraStyle += 'margin-top:' + p.paraStyle.marginTop + 'pt;';
                 if (p.paraStyle.marginBottom) paraStyle += 'margin-bottom:' + p.paraStyle.marginBottom + 'pt;';
                 // Handle hanging indent (negative firstLineIndent) properly in table cells
@@ -1423,7 +1429,7 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
                 let paraStyle = '';
                 if (p.paraStyle) {
                   if (p.paraStyle.align) paraStyle += 'text-align:' + p.paraStyle.align.toLowerCase() + ';';
-                  if (p.paraStyle.lineSpacing) paraStyle += 'line-height:' + (p.paraStyle.lineSpacing / 100) + ';';
+                  if (p.paraStyle.lineSpacing) paraStyle += 'line-height:' + (p.paraStyle.lineSpacingType === 'fixed' ? p.paraStyle.lineSpacing + 'pt' : (p.paraStyle.lineSpacing / 100)) + ';';
                   if (p.paraStyle.marginTop) paraStyle += 'margin-top:' + p.paraStyle.marginTop + 'pt;';
                   if (p.paraStyle.marginBottom) paraStyle += 'margin-bottom:' + p.paraStyle.marginBottom + 'pt;';
                   const marginLeftVal = p.paraStyle.marginLeft || 0;
@@ -1464,7 +1470,7 @@ export function getWebviewContent(_webview: vscode.Webview, _extensionUri: vscod
               let paraStyle = '';
               if (p.paraStyle) {
                 if (p.paraStyle.align) paraStyle += 'text-align:' + p.paraStyle.align.toLowerCase() + ';';
-                if (p.paraStyle.lineSpacing) paraStyle += 'line-height:' + (p.paraStyle.lineSpacing / 100) + ';';
+                if (p.paraStyle.lineSpacing) paraStyle += 'line-height:' + (p.paraStyle.lineSpacingType === 'fixed' ? p.paraStyle.lineSpacing + 'pt' : (p.paraStyle.lineSpacing / 100)) + ';';
                 if (p.paraStyle.marginTop) paraStyle += 'margin-top:' + p.paraStyle.marginTop + 'pt;';
                 if (p.paraStyle.marginBottom) paraStyle += 'margin-bottom:' + p.paraStyle.marginBottom + 'pt;';
                 const marginLeftVal = p.paraStyle.marginLeft || 0;

@@ -2,6 +2,18 @@
 
 All notable changes to "HWPX Editor" extension will be documented in this file.
 
+## [0.4.2] - 2026-04-04
+
+### Fixed
+- HWP 표 내 텍스트 위아래 겹침 현상 수정 (lineSpacing 이중 나누기 버그)
+  - HWP 파서에서 lineSpacing을 /100 한 뒤 웹뷰에서 다시 /100 하여 line-height가 0.01 수준으로 설정되던 문제
+- HWP 표 셀에서 이미지+텍스트 혼합 시 텍스트가 사라지는 버그 수정 (8개 셀 복구)
+  - 이미지가 cell.elements에 직접 push되면 paragraphs가 병합되지 않던 문제
+- fixed/atLeast 등 비율이 아닌 lineSpacingType 처리 추가 (HWP/HWPX 공통)
+  - 고정 줄간격을 pt 단위로 올바르게 변환
+- HWPX 파서에서 lineSpacingType을 paraStyle에 전달하지 않던 문제 수정
+- HWP Writer의 lineSpacing 역변환 로직을 새 포맷에 맞춰 수정
+
 ## [0.4.0] - 2026-04-04
 
 ### Added
